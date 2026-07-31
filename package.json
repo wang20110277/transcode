@@ -1,0 +1,25 @@
+{
+  "name": "@trans-ai/trans-code",
+  "version": "0.1.0",
+  "description": "AI-powered multi-model coding CLI",
+  "type": "module",
+  "bin": {
+    "transcode": "./bin/transcode.ts"
+  },
+  "scripts": {
+    "start": "bun src/main.tsx",
+    "dev": "bun --watch src/main.tsx"
+  },
+  "dependencies": {
+    "ink": "^5.1.0",
+    "react": "^18.3.1",
+    "@langchain/core": "^0.3.0",
+    "@langchain/openai": "^0.4.0",
+    "@langchain/anthropic": "^0.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.3.0",
+    "typescript": "^5.7.0"
+  }
+}
