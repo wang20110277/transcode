@@ -8,14 +8,21 @@
   },
   "scripts": {
     "start": "bun src/main.tsx",
-    "dev": "bun --watch src/main.tsx"
+    "dev": "bun --watch src/main.tsx",
+    "acp": "bun bin/transcode.ts acp",
+    "typecheck": "tsc --noEmit",
+    "test:acp": "bun scripts/acp-smoke.ts",
+    "test:acp:openai": "bun scripts/acp-openai-smoke.ts",
+    "test:acp:real": "bun scripts/acp-real-smoke.ts",
+    "model:check": "bun scripts/model-check.ts"
   },
   "dependencies": {
     "ink": "^5.1.0",
     "react": "^18.3.1",
     "@langchain/core": "^0.3.0",
     "@langchain/openai": "^0.4.0",
-    "@langchain/anthropic": "^0.3.0"
+    "@langchain/anthropic": "^0.3.0",
+    "zod": "^3.25.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

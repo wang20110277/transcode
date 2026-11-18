@@ -1,2 +1,4 @@
 #!/usr/bin/env bun
-import "../src/main.tsx";
+import { runCli } from '../src/cli.ts';
+
+await runCli(process.argv.slice(2));

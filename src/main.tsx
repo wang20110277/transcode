@@ -1,20 +1,19 @@
 import { render, Box, Text } from 'ink';
 import { useState } from 'react';
-import { getAvailableModels, type ModelId } from './provider/provider.js';
+import { envModelLabel, getAvailableModels, type ModelId } from './provider/provider.js';
 import { type CommandContext } from './commands.js';
 import REPL from './screens/REPL.js';
-
-const VERSION = '0.1.0';
+import { VERSION } from './version.js';
 const DEFAULT_MODEL: ModelId = 'opus';
 
-function Banner({ modelId, cwd }: { modelId: ModelId; cwd: string }) {
+function Banner({ modelId, cwd, envLabel }: { modelId: ModelId; cwd: string; envLabel?: string }) {
   const models = getAvailableModels();
   const current = models.find(m => m.id === modelId);
 
   const logo = `
-  ┌─────────────────────────────────────────────┐
-  │  T R A N S C O D E  ·  Media & VoIP Engine  │
-  └─────────────────────────────────────────────┘`
+  ┌──────────────────────────────────────────────┐
+  │  T R A N S C O D E  ·  Multi-model Agent      │
+  └──────────────────────────────────────────────┘`
 
   return (
     <Box flexDirection="column" marginBottom={1}>
@@ -25,7 +24,7 @@ function Banner({ modelId, cwd }: { modelId: ModelId; cwd: string }) {
       </Box>
       <Box>
         <Text color="yellow">Model: </Text>
-        <Text>{current?.name ?? modelId}</Text>
+        <Text>{envLabel ?? current?.name ?? modelId}</Text>
       </Box>
       <Box>
         <Text color="blue">Dir: </Text>
@@ -50,7 +49,7 @@ function App() {
 
   return (
     <Box flexDirection="column">
-      <Banner modelId={modelId} cwd={cwd} />
+      <Banner modelId={modelId} cwd={cwd} envLabel={envModelLabel()} />
       <REPL ctx={ctx} />
     </Box>
   );
