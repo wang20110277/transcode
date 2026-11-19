@@ -5,6 +5,11 @@ import { fileURLToPath } from 'node:url';
 import { VERSION } from './version.js';
 
 const PKG = '@trans-ai/trans-code';
+// Upgrades must talk to the official registry: mirrors (npmmirror & co)
+// sync metadata and tarballs independently, so a just-released version
+// can be visible to `view` but not installable, silently "upgrading"
+// to the stale version.
+const OFFICIAL = 'https://registry.npmjs.org';
 
 function sh(cmd: string, args: string[]): Promise<{ code: number; stdout: string }> {
   return new Promise(resolve => {
@@ -38,7 +43,7 @@ async function npmRoot(): Promise<string> {
 }
 
 async function latestVersion(): Promise<string | null> {
-  const r = await sh('npm', ['view', `${PKG}@latest`, 'version']);
+  const r = await sh('npm', ['view', `${PKG}@latest`, 'version', `--registry=${OFFICIAL}`]);
   if (r.code !== 0) return null;
   const v = r.stdout.trim();
   return v || null;
@@ -94,7 +99,7 @@ export async function runUpgrade(): Promise<void> {
   }
 
   process.stdout.write(`Upgrading ${VERSION} → ${latest}…\n`);
-  const code = await shInherit('npm', ['i', '-g', `${PKG}@latest`]);
+  const code = await shInherit('npm', ['i', '-g', `${PKG}@latest`, `--registry=${OFFICIAL}`]);
   if (code !== 0) {
     process.stderr.write('[transcode] upgrade failed — see npm output above.\n');
     process.exitCode = 1;
