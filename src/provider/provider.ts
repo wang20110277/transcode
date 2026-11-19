@@ -244,8 +244,8 @@ export function resolveModel(spec?: string): ResolvedModel {
   }
 
   // Bare unknown model name: route through a provider guessed from the name,
-  // then fall back to TRANSCODE_DEFAULT_PROVIDER. This lets multica users type
-  // a model id without remembering the provider:model syntax.
+  // then fall back to TRANSCODE_DEFAULT_PROVIDER. This lets transonce/multica
+  // users type a model id without remembering the provider:model syntax.
   const lower = raw.toLowerCase();
   let fallback = PROVIDER_DEFAULTS[defaultProvider()] ?? PROVIDER_DEFAULTS.openai;
   if (lower.startsWith('claude')) fallback = PROVIDER_DEFAULTS.anthropic;

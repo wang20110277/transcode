@@ -1,9 +1,9 @@
 # transcode
 
-多模型 AI 编码 Agent CLI。当前 MVP 的目标是：**作为本地 Agent 被 multica 通过 ACP 调用**。
+多模型 AI 编码 Agent CLI。当前 MVP 的目标是：**作为本地 Agent 被 transonce、multica 等客户端通过 ACP 调用**。
 
 - 终端侧：Ink REPL（保留原有命令：`help` / `models` / `clear` / `exit`）
-- Agent 侧：`transcode acp` 启动 ACP v1 stdio 服务，供 multica daemon 等客户端调用
+- Agent 侧：`transcode acp` 启动 ACP v1 stdio 服务，供 transonce、multica 等客户端调用
 - 模型侧：Anthropic / OpenAI 及任意 OpenAI 兼容网关（DeepSeek、GLM、MiniMax、Kimi、自建网关等）
 - 工具侧：`read_file` / `write_file` / `edit_file` / `glob` / `grep` / `bash`
 
@@ -84,7 +84,7 @@ bun run test:acp:real        # 完整 ACP + 工具调用（会创建临时 works
 ## 本地运行
 
 ```bash
-# ACP 服务（给 multica 用）
+# ACP 服务（给 transonce / multica 等 ACP 客户端用）
 bun bin/transcode.ts acp
 
 # 交互式 REPL

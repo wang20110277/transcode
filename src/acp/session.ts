@@ -8,6 +8,7 @@ import {
 } from '@langchain/core/messages';
 import { createModel, getAvailableModels, resolveModel } from '../provider/provider.js';
 import { runAgentLoop, type AgentEvent, type PermissionRequest } from '../agent/loop.js';
+import { createToolSession, type ToolSession } from '../agent/tools/index.js';
 import { buildSystemPrompt, loadProjectContext } from '../agent/system-prompt.js';
 import {
   RPC_ERRORS,
@@ -76,6 +77,8 @@ export class AcpSession {
   private busy = false;
   private abortController?: AbortController;
   private modelSpec: string;
+  /** Shared across prompts: shell cwd persistence and read-file tracking. */
+  private readonly toolSession: ToolSession;
 
   constructor(
     private readonly host: AcpSessionHost,
@@ -83,6 +86,7 @@ export class AcpSession {
     modelSpec?: string,
   ) {
     this.modelSpec = modelSpec?.trim() || process.env.TRANSCODE_MODEL || '';
+    this.toolSession = createToolSession(cwd);
   }
 
   get modelState(): AcpSessionModelState {
@@ -136,6 +140,7 @@ export class AcpSession {
         messages: this.messages,
         systemPrompt,
         signal,
+        toolSession: this.toolSession,
         onEvent: (event) => this.forwardEvent(event),
         requestPermission: (request) => this.askPermission(request, signal),
       });

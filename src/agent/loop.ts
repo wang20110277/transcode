@@ -12,9 +12,11 @@ import {
   bindableTools,
   findAgentTool,
   invokeTool,
+  createToolSession,
   type AgentTool,
   type ToolKind,
-} from './tools.js';
+  type ToolSession,
+} from './tools/index.js';
 
 export type AgentEvent =
   | { type: 'text'; text: string }
@@ -33,6 +35,8 @@ export type AgentEvent =
       name: string;
       output: string;
       ok: boolean;
+      /** Unified diff for UI rendering; not sent to the model. */
+      diff?: string;
     };
 
 export interface PermissionRequest {
@@ -61,6 +65,8 @@ export interface AgentLoopOptions {
   signal?: AbortSignal;
   onEvent: (event: AgentEvent) => void | Promise<void>;
   requestPermission?: RequestPermission;
+  /** Session state shared across tool calls (shell cwd, read files). Created when absent. */
+  toolSession?: ToolSession;
 }
 
 export interface AgentLoopResult {
@@ -148,6 +154,7 @@ async function runMockTurn(
   options: AgentLoopOptions,
   prompt: string,
 ): Promise<StopReason> {
+  const toolSession = options.toolSession ?? createToolSession(options.cwd);
   if (prompt.includes('MOCK_TOOL_BASH')) {
     const tool = findAgentTool('bash');
     const input = { command: 'echo mock-tool-ok' };
@@ -178,7 +185,11 @@ async function runMockTurn(
       : true;
 
     const result = allowed
-      ? await invokeTool(tool, input, { cwd: options.cwd, signal: options.signal })
+      ? await invokeTool(tool, input, {
+          cwd: toolSession.cwd,
+          signal: options.signal,
+          session: toolSession,
+        })
       : { ok: false, output: 'Permission denied.' };
 
     await options.onEvent({
@@ -187,6 +198,7 @@ async function runMockTurn(
       name: tool.name,
       output: result.output,
       ok: result.ok,
+      diff: result.diff,
     });
 
     options.messages.push(
@@ -229,6 +241,7 @@ export async function runAgentLoop(
 
   const tools = options.tools ?? AGENT_TOOLS;
   const maxTurns = options.maxTurns ?? 50;
+  const toolSession = options.toolSession ?? createToolSession(options.cwd);
   if (!options.model) throw new Error('No model configured for the agent loop');
 
   const runnable =
@@ -275,7 +288,7 @@ export async function runAgentLoop(
       if (options.signal?.aborted) return { stopReason: 'cancelled', messages };
 
       const input = (call.args ?? {}) as Record<string, unknown>;
-      const tool = findAgentTool(call.name);
+      const tool = tools.find((item) => item.name === call.name) ?? findAgentTool(call.name);
       const toolCallId = call.id ?? `call_${turn}_${call.name}`;
       const title = tool ? tool.title(input) : call.name;
 
@@ -288,7 +301,7 @@ export async function runAgentLoop(
         input,
       });
 
-      let result: { ok: boolean; output: string };
+      let result: { ok: boolean; output: string; diff?: string };
       if (!tool) {
         result = { ok: false, output: `Unknown tool: ${call.name}` };
       } else {
@@ -306,8 +319,9 @@ export async function runAgentLoop(
 
         result = allowed
           ? await invokeTool(tool, input, {
-              cwd: options.cwd,
+              cwd: toolSession.cwd,
               signal: options.signal,
+              session: toolSession,
             })
           : { ok: false, output: 'Permission denied by the client.' };
       }
@@ -318,6 +332,7 @@ export async function runAgentLoop(
         name: call.name,
         output: result.output,
         ok: result.ok,
+        diff: result.diff,
       });
 
       messages.push(

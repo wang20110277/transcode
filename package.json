@@ -23,6 +23,7 @@
     "dev": "bun run build:repl && node dist/main.js",
     "acp": "bun bin/transcode.ts acp",
     "typecheck": "tsc --noEmit",
+    "test": "bun test",
     "test:acp": "bun scripts/acp-smoke.ts",
     "test:acp:openai": "bun scripts/acp-openai-smoke.ts",
     "test:acp:real": "bun scripts/acp-real-smoke.ts",

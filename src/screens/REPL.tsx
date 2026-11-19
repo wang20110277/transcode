@@ -1,9 +1,14 @@
 import { Box, Text, useInput, useApp } from 'ink';
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import path from 'node:path';
 import { findCommand, getCommands, type CommandContext } from '../commands.js';
 import { getAvailableModels, createProviderWithKey, createProvider, setPreferredModel, type ModelId } from '../provider/provider.js';
 import { runAgentLoop, type PermissionRequest } from '../agent/loop.js';
-import { buildSystemPrompt, loadProjectContext } from '../agent/system-prompt.js';
+import { createToolSession } from '../agent/tools/index.js';
+import { walkFiles } from '../agent/tools/fs-utils.js';
+import { applyCompletion, filterFiles, mentionQuery } from './file-completion.js';
+import { renderDiff } from './diff-render.js';
+import { buildSystemPrompt, INIT_PROMPT, loadProjectContext } from '../agent/system-prompt.js';
 import { HumanMessage, SystemMessage, type BaseMessage } from '@langchain/core/messages';
 
 interface HistoryEntry {
@@ -54,6 +59,45 @@ export default function REPL({ ctx }: REPLProps) {
   const busyRef = useRef(false);
   const abortRef = useRef<AbortController | undefined>(undefined);
   const messagesRef = useRef<BaseMessage[]>([]);
+  // One tool session per process: bash cwd and read-file state persist
+  // across prompts, like the ACP session.
+  const toolSessionRef = useRef(createToolSession(process.cwd()));
+
+  // @-mention file completion: lazy file list, active query, dismissed flag.
+  const [fileList, setFileList] = useState<string[] | null>(null);
+  const [mentionCursor, setMentionCursor] = useState(0);
+  const [mentionDismissed, setMentionDismissed] = useState(false);
+  const mention = phase === 'idle' && !busy ? mentionQuery(input) : null;
+  const mentionActive = mention !== null && !mentionDismissed;
+
+  useEffect(() => {
+    if (mention === null) setMentionDismissed(false);
+  }, [mention]);
+  useEffect(() => {
+    setMentionCursor(0);
+  }, [mention]);
+  // Load the workspace file list on first use; refresh on next open after a
+  // prompt so files the agent created/removed show up.
+  useEffect(() => {
+    if (!mentionActive || fileList) return;
+    let cancelled = false;
+    walkFiles(process.cwd())
+      .then((files) => {
+        if (cancelled) return;
+        setFileList(
+          files.map((file) => path.relative(process.cwd(), file).replace(/\\/g, '/')).sort(),
+        );
+      })
+      .catch(() => setFileList([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [mentionActive, fileList]);
+
+  const mentionCandidates = useMemo(
+    () => (mentionActive && fileList ? filterFiles(fileList, mention ?? '', 8) : []),
+    [mentionActive, fileList, mention],
+  );
   const pendingPermissionRef = useRef<{
     request: PermissionRequest;
     resolve: (allow: boolean) => void;
@@ -96,11 +140,11 @@ export default function REPL({ ctx }: REPLProps) {
   );
 
   const runChat = useCallback(
-    async (text: string) => {
+    async (text: string, display?: string) => {
       setBusyBoth(true);
       const controller = new AbortController();
       abortRef.current = controller;
-      addHistory({ input: text, output: '' });
+      addHistory({ input: display ?? text, output: '' });
 
       try {
         const provider =
@@ -127,6 +171,7 @@ export default function REPL({ ctx }: REPLProps) {
           messages: messagesRef.current,
           systemPrompt,
           signal: controller.signal,
+          toolSession: toolSessionRef.current,
           onEvent: event => {
             if (event.type === 'text') {
               appendChatOutput(lastWasTool ? `\n${event.text}` : event.text);
@@ -136,6 +181,7 @@ export default function REPL({ ctx }: REPLProps) {
               lastWasTool = true;
             } else if (event.type === 'tool_result') {
               appendChatOutput(event.ok ? ' ✓' : ' ✗');
+              if (event.diff) appendChatOutput(`\n${renderDiff(event.diff)}`);
               lastWasTool = true;
             }
           },
@@ -153,6 +199,8 @@ export default function REPL({ ctx }: REPLProps) {
       } finally {
         setBusyBoth(false);
         abortRef.current = undefined;
+        // The agent may have created/removed files; rebuild @-completion list.
+        setFileList(null);
         dragFlush();
       }
     },
@@ -212,6 +260,14 @@ export default function REPL({ ctx }: REPLProps) {
       return;
     }
 
+    if (cmdName === 'init') {
+      commitInput('');
+      setHistoryIndex(-1);
+      setSavedInput('');
+      await runChat(INIT_PROMPT, trimmed);
+      return;
+    }
+
     const cmd = findCommand(cmdName);
 
     if (cmd) {
@@ -250,6 +306,11 @@ export default function REPL({ ctx }: REPLProps) {
     if (process.env.TRANSCODE_DEBUG_KEYS === '1') {
       // eslint-disable-next-line no-console
       console.error(`CB ${JSON.stringify(ch)} ret=${key.return} esc=${key.escape}`);
+    }
+    // @-mention popup: Esc dismisses it instead of exiting the app.
+    if (key.escape && mentionActive && mentionCandidates.length > 0) {
+      setMentionDismissed(true);
+      return;
     }
     if (key.escape) {
       // While generating, Esc cancels instead of exiting.
@@ -297,6 +358,23 @@ export default function REPL({ ctx }: REPLProps) {
         return;
       }
       return;
+    }
+
+    // @-mention popup navigation and completion (takes precedence over
+    // history navigation, tab completion and submission).
+    if (phase === 'idle' && mentionActive && mentionCandidates.length > 0) {
+      if (key.upArrow) {
+        setMentionCursor(prev => (prev - 1 + mentionCandidates.length) % mentionCandidates.length);
+        return;
+      }
+      if (key.downArrow) {
+        setMentionCursor(prev => (prev + 1) % mentionCandidates.length);
+        return;
+      }
+      if (key.tab || key.return) {
+        commitInput(applyCompletion(inputRef.current, mentionCandidates[mentionCursor]));
+        return;
+      }
     }
 
     if (key.return) {
@@ -433,6 +511,28 @@ export default function REPL({ ctx }: REPLProps) {
           </Box>
         );
       })()}
+
+      {phase === 'idle' && !busy && mentionActive && (
+        <Box flexDirection="column" marginLeft={2}>
+          {fileList === null ? (
+            <Text color="gray" dimColor>… loading files</Text>
+          ) : mentionCandidates.length === 0 ? (
+            <Text color="gray" dimColor>no files match “{mention}”</Text>
+          ) : (
+            <>
+              {mentionCandidates.map((file, i) => (
+                <Box key={file}>
+                  <Text color={i === mentionCursor ? 'cyan' : 'gray'}>
+                    {i === mentionCursor ? '❯ ' : '  '}
+                    {file}
+                  </Text>
+                </Box>
+              ))}
+              <Text color="gray" dimColor>↑↓ navigate · tab/enter insert · esc close</Text>
+            </>
+          )}
+        </Box>
+      )}
     </Box>
   );
 }

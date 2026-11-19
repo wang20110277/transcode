@@ -1,8 +1,21 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-const CONTEXT_FILES = ['AGENTS.md', 'CLAUDE.md', 'TRANSCODE.md', '.transcode/AGENTS.md'];
+const CONTEXT_FILES = ['TRANS.md', 'AGENTS.md', 'CLAUDE.md', 'TRANSCODE.md', '.transcode/AGENTS.md'];
 const MAX_CONTEXT_CHARS = 40_000;
+
+/** Prompt behind /init: agent analyzes the project and writes TRANS.md. */
+export const INIT_PROMPT = `Analyze this project and create a TRANS.md file at the workspace root that records the project background and working rules, like CLAUDE.md does for Claude Code.
+
+Explore first with glob, grep and read_file: README, package.json (or other manifest) scripts, the directory layout, entry points, build/test/lint tooling, and any existing contributor docs. Do not guess what you can read.
+
+Then write TRANS.md with these sections (keep the whole file under 60 lines):
+- Project overview: what this project is, in 2-3 sentences
+- Commands: how to install, build, test, lint/typecheck — exact commands
+- Architecture: key directories/modules and how they fit together
+- Conventions: naming, code style, commit message style if discoverable
+
+Write TRANS.md only; do not modify any other file. Reply with a one-paragraph summary when done.`;
 
 export interface ProjectContext {
   cwd: string;
@@ -76,6 +89,7 @@ export function buildSystemPrompt(
     '## How to work',
     '- Inspect the repository before changing it. Read the relevant files first.',
     '- Prefer read_file, glob and grep for exploration; use bash for builds, tests and git.',
+    '- The bash working directory persists across calls; you do not need to cd again each time.',
     '- Use edit_file for targeted changes and write_file for new files.',
     '- Keep changes focused on the task. Do not undo unrelated user work.',
     '- After changing code, run the cheapest relevant check (typecheck, targeted test) when available.',

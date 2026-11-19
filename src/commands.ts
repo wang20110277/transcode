@@ -38,6 +38,15 @@ const commands: Command[] = [
     },
   },
   {
+    name: 'init',
+    description: 'Analyze the project and write TRANS.md',
+    // Intercepted by the REPL before command dispatch (like /models) so the
+    // analysis runs through the full agent loop with tools and permissions.
+    execute: () => ({
+      output: 'Analyzing the project and writing TRANS.md…',
+    }),
+  },
+  {
     name: 'clear',
     description: 'Clear screen',
     execute: (_args, ctx) => {

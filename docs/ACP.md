@@ -1,6 +1,6 @@
 # transcode ACP 协议说明
 
-transcode 实现了 [Agent Client Protocol (ACP) v1](https://agentclientprotocol.com/) 的最小子集，通过 stdin/stdout 上的换行分隔 JSON-RPC 2.0 通信。multica daemon 可以把 transcode 当作一个本地 ACP runtime 启动。
+transcode 实现了 [Agent Client Protocol (ACP) v1](https://agentclientprotocol.com/) 的最小子集，通过 stdin/stdout 上的换行分隔 JSON-RPC 2.0 通信。transonce、multica 等客户端可以把 transcode 当作一个本地 ACP runtime 启动。
 
 ## 启动
 
@@ -119,7 +119,7 @@ bun bin/transcode.ts acp
 | `tool_call` | 工具开始：`toolCallId`、`name`、`title`、`kind`、`status: "pending"`、`rawInput` |
 | `tool_call_update` | 工具结束：`toolCallId`、`status: "completed" \| "failed"`、`content` |
 
-工具标题使用 ACP 常见前缀，便于 multica 映射：
+工具标题使用 ACP 常见前缀，便于 transonce / multica 等客户端映射：
 
 - `terminal: <command>`
 - `read: <path>`

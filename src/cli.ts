@@ -4,7 +4,7 @@ const USAGE = `transcode v${VERSION}
 
 Usage:
   transcode                 Start the interactive REPL
-  transcode acp             Start the ACP stdio server (for multica and other ACP clients)
+  transcode acp             Start the ACP stdio server (for transonce, multica and other ACP clients)
   transcode upgrade         Upgrade the npm global install to the latest version
   transcode --version       Print the version
   transcode --help          Show this help
