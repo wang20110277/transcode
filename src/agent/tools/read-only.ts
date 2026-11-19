@@ -103,8 +103,39 @@ function parseSegments(command: string): { segments: Segment[]; unsafe: boolean 
       continue;
     }
 
-    if (char === '>' || char === '<' || char === '`') {
-      unsafe = true; // redirection, heredoc, backtick substitution
+    if (char === '>') {
+      // Output redirection: harmless when the target is /dev/null or an fd
+      // duplication (2>&1); anything else writes a file and disqualifies.
+      let j = i + 1;
+      if (command[j] === '>') j++; // >>
+      let k = j;
+      while (k < command.length && /\s/.test(command[k]!)) k++;
+      if (command[k] === '&' && /[0-9]/.test(command[k + 1] ?? '')) {
+        i = k + 1; // >&N — safe, consumed
+        continue;
+      }
+      let t = k;
+      if (command[t] === '"' || command[t] === "'") t++;
+      if (command.startsWith('/dev/null', t)) {
+        i = t + 8; // >/dev/null — safe, consumed
+        continue;
+      }
+      unsafe = true;
+      continue;
+    }
+
+    if (char === '<') {
+      // Heredocs (<<) and process substitution (<() are disqualifying;
+      // a plain input redirect (< file) only reads.
+      if (command[i + 1] === '<' || command[i + 1] === '(' || command[i + 1] === '>') {
+        unsafe = true;
+        continue;
+      }
+      continue; // target tokenizes as a regular word
+    }
+
+    if (char === '`') {
+      unsafe = true; // backtick substitution
       continue;
     }
 

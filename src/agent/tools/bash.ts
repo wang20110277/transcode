@@ -218,7 +218,8 @@ export const bashTool: AgentTool = {
   description:
     'Run a shell command in the workspace using the user shell. Working directory changes (cd) ' +
     'persist across calls. Returns stdout, stderr and the exit code. ' +
-    'Prefer dedicated read/write/edit/glob/grep tools for file operations.',
+    'For viewing file contents use read_file (line-capped, paginates with offset/limit) — ' +
+    'cat/sed dumps of entire files waste context.',
   kind: 'execute',
   isMutating: true,
   isReadOnly: (input) => isReadOnlyCommand(String(input.command ?? '')),

@@ -75,4 +75,23 @@ describe('isReadOnlyCommand', () => {
     expect(isReadOnlyCommand('')).toBe(false);
     expect(isReadOnlyCommand('   ')).toBe(false);
   });
+
+  test('redirects to /dev/null and fd duplication are harmless', () => {
+    expect(isReadOnlyCommand('cat config.py 2>/dev/null')).toBe(true);
+    expect(isReadOnlyCommand('ls missing 2>/dev/null; echo done')).toBe(true);
+    expect(isReadOnlyCommand('grep foo bar >/dev/null')).toBe(true);
+    expect(isReadOnlyCommand('echo hi 2>>/dev/null')).toBe(true);
+    expect(isReadOnlyCommand('grep foo bar 2>&1 | wc -l')).toBe(true);
+  });
+
+  test('redirects to real files still disqualify', () => {
+    expect(isReadOnlyCommand('grep foo bar > out.txt')).toBe(false);
+    expect(isReadOnlyCommand('grep foo bar >> out.txt')).toBe(false);
+    expect(isReadOnlyCommand('grep foo bar 2> err.txt')).toBe(false);
+  });
+
+  test('input redirection is read-only, process substitution is not', () => {
+    expect(isReadOnlyCommand('sort < input.txt')).toBe(true);
+    expect(isReadOnlyCommand('cat <(ls)')).toBe(false);
+  });
 });

@@ -6,6 +6,17 @@ import { bashTool } from './bash.js';
 import { createToolSession, type ToolSession } from './session.js';
 import type { ToolContext } from './types.js';
 
+describe('bash tool wiring', () => {
+  test('description steers file viewing to read_file', () => {
+    expect(bashTool.description).toContain('read_file');
+  });
+
+  test('isReadOnly is wired to the analyzer', () => {
+    expect(bashTool.isReadOnly?.({ command: 'cat config.py 2>/dev/null' })).toBe(true);
+    expect(bashTool.isReadOnly?.({ command: 'npm install' })).toBe(false);
+  });
+});
+
 const cleanups: Array<() => void> = [];
 const savedEnv: Record<string, string | undefined> = {};
 function setEnv(key: string, value: string | undefined): void {

@@ -2,7 +2,19 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { INIT_PROMPT, loadProjectContext } from './system-prompt.js';
+import { INIT_PROMPT, buildSystemPrompt, loadProjectContext } from './system-prompt.js';
+
+describe('buildSystemPrompt', () => {
+  test('steers file inspection away from whole-file cat/sed dumps', () => {
+    const prompt = buildSystemPrompt(
+      { cwd: '/tmp', projectFiles: [] },
+      { modelName: 'test-model' },
+    );
+    expect(prompt).toContain('wc -l');
+    expect(prompt).toContain('offset');
+    expect(prompt.toLowerCase()).toContain('do not cat');
+  });
+});
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {

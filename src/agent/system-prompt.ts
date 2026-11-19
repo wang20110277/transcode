@@ -89,6 +89,9 @@ export function buildSystemPrompt(
     '## How to work',
     '- Inspect the repository before changing it. Read the relevant files first.',
     '- Prefer read_file, glob and grep for exploration; use bash for builds, tests and git.',
+    '- Inspect file contents with read_file, not cat/sed: it caps lines and paginates. ' +
+      'Check unknown file sizes with wc -l first and read large files in offset/limit chunks. ' +
+      'Do not cat entire files into the conversation.',
     '- The bash working directory persists across calls; you do not need to cd again each time.',
     '- Use edit_file for targeted changes and write_file for new files.',
     '- Keep changes focused on the task. Do not undo unrelated user work.',
