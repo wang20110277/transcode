@@ -3,12 +3,24 @@
   "version": "0.1.0",
   "description": "AI-powered multi-model coding CLI",
   "type": "module",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wang20110277/transcode.git"
+  },
+  "files": [
+    "bin",
+    "src",
+    "docs",
+    "README.md"
+  ],
   "bin": {
     "transcode": "./bin/transcode.ts"
   },
   "scripts": {
-    "start": "bun src/main.tsx",
-    "dev": "bun --watch src/main.tsx",
+    "build:repl": "bun build src/main.tsx --target=node --packages=external --outdir=dist",
+    "start": "bun run build:repl && node dist/main.js",
+    "dev": "bun run build:repl && node dist/main.js",
     "acp": "bun bin/transcode.ts acp",
     "typecheck": "tsc --noEmit",
     "test:acp": "bun scripts/acp-smoke.ts",

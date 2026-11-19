@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { envModelLabel, getAvailableModels, type ModelId } from './provider/provider.js';
 import { type CommandContext } from './commands.js';
 import REPL from './screens/REPL.js';
+import { createKeyedStdin } from './tui/keyed-stdin.js';
 import { VERSION } from './version.js';
 const DEFAULT_MODEL: ModelId = 'opus';
 
@@ -55,4 +56,7 @@ function App() {
   );
 }
 
-render(<App />);
+// KeyedStdin splits burst keystrokes into individual keys — Ink (5 and 8)
+// treats a whole chunk as a single keypress, so pasted/burst input breaks
+// otherwise. Required on every runtime.
+render(<App />, { stdin: createKeyedStdin() });

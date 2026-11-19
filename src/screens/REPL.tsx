@@ -1,5 +1,5 @@
 import { Box, Text, useInput, useApp } from 'ink';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { findCommand, getCommands, type CommandContext } from '../commands.js';
 import { getAvailableModels, createProviderWithKey, type ModelId } from '../provider/provider.js';
 
@@ -17,6 +17,15 @@ interface REPLProps {
 export default function REPL({ ctx }: REPLProps) {
   const { exit } = useApp();
   const [input, setInput] = useState('');
+  // Multiple keystrokes can be handled in one React batch before a
+  // re-render; closures over `input` would see stale values (e.g. the
+  // Enter after a fast paste would submit without the last characters).
+  // The ref is the source of truth; the state mirrors it for rendering.
+  const inputRef = useRef('');
+  const commitInput = useCallback((next: string) => {
+    inputRef.current = next;
+    setInput(next);
+  }, []);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [savedInput, setSavedInput] = useState('');
@@ -25,6 +34,13 @@ export default function REPL({ ctx }: REPLProps) {
   const [modelCursor, setModelCursor] = useState(0);
 
   const models = getAvailableModels();
+  // Bun's scheduler can drop the render flush for updates issued from the
+  // stdin event path (updates from timers always flush). Nudge a re-render
+  // on a timer so submitted commands are guaranteed to paint.
+  const [flushTick, setFlushTick] = useState(0);
+  const dragFlush = useCallback(() => {
+    setTimeout(() => setFlushTick(t => t + 1), 0);
+  }, []);
 
   const addHistory = useCallback((entry: HistoryEntry) => {
     setHistory(prev => [...prev, entry]);
@@ -59,13 +75,13 @@ export default function REPL({ ctx }: REPLProps) {
     setPhase('idle');
   }, [pendingModel, ctx, addHistory, enterModelSelect, models]);
 
-  const handleSubmit = useCallback(async () => {
-    const trimmed = input.trim();
+  const handleSubmit = useCallback(async (raw: string) => {
+    const trimmed = raw.trim();
     if (!trimmed) return;
 
     if (phase === 'model_apikey') {
       handleApiKey(trimmed);
-      setInput('');
+      commitInput('');
       return;
     }
 
@@ -77,7 +93,8 @@ export default function REPL({ ctx }: REPLProps) {
     if (cmdName === 'models') {
       addHistory({ input: trimmed, output: 'Select a model (↑↓ to navigate, Enter to select):' });
       enterModelSelect();
-      setInput('');
+      commitInput('');
+      dragFlush();
       return;
     }
 
@@ -100,18 +117,23 @@ export default function REPL({ ctx }: REPLProps) {
     } else {
       addHistory({ input: trimmed, output: `Unknown command: ${cmdName}. Type "help" for available commands.` });
     }
+    dragFlush();
 
-    setInput('');
+    commitInput('');
     setHistoryIndex(-1);
     setSavedInput('');
-  }, [input, exit, ctx, phase, handleApiKey, addHistory, enterModelSelect]);
+  }, [exit, ctx, phase, handleApiKey, addHistory, enterModelSelect, commitInput, dragFlush]);
 
   useInput((ch, key) => {
+    if (process.env.TRANSCODE_DEBUG_KEYS === '1') {
+      // eslint-disable-next-line no-console
+      console.error(`CB ${JSON.stringify(ch)} ret=${key.return} esc=${key.escape}`);
+    }
     if (key.escape) {
       if (phase !== 'idle') {
         setPhase('idle');
         setPendingModel(null);
-        setInput('');
+        commitInput('');
         addHistory({ input: '', output: 'Cancelled.' });
         return;
       }
@@ -124,7 +146,7 @@ export default function REPL({ ctx }: REPLProps) {
         const selected = models[modelCursor];
         setPendingModel(selected.id);
         setPhase('model_apikey');
-        setInput('');
+        commitInput('');
         return;
       }
       if (key.upArrow) {
@@ -139,20 +161,20 @@ export default function REPL({ ctx }: REPLProps) {
     }
 
     if (key.return) {
-      handleSubmit();
+      handleSubmit(inputRef.current);
       return;
     }
 
     if (key.backspace || key.delete) {
-      setInput(prev => prev.slice(0, -1));
+      commitInput(inputRef.current.slice(0, -1));
       return;
     }
 
-    if (key.tab && phase === 'idle' && input.startsWith('/')) {
-      const prefix = input.slice(1).toLowerCase();
+    if (key.tab && phase === 'idle' && inputRef.current.startsWith('/')) {
+      const prefix = inputRef.current.slice(1).toLowerCase();
       const matches = getCommands().filter(c => c.name.startsWith(prefix));
       if (matches.length === 1) {
-        setInput(`/${matches[0].name} `);
+        commitInput(`/${matches[0].name} `);
       }
       return;
     }
@@ -162,7 +184,7 @@ export default function REPL({ ctx }: REPLProps) {
       if (inputs.length === 0) return;
 
       if (historyIndex === -1) {
-        setSavedInput(input);
+        setSavedInput(inputRef.current);
       }
 
       const newIndex = historyIndex === -1
@@ -170,7 +192,7 @@ export default function REPL({ ctx }: REPLProps) {
         : Math.max(0, historyIndex - 1);
 
       setHistoryIndex(newIndex);
-      setInput(inputs[newIndex]);
+      commitInput(inputs[newIndex]);
       return;
     }
 
@@ -182,16 +204,16 @@ export default function REPL({ ctx }: REPLProps) {
 
       if (newIndex >= inputs.length) {
         setHistoryIndex(-1);
-        setInput(savedInput);
+        commitInput(savedInput);
       } else {
         setHistoryIndex(newIndex);
-        setInput(inputs[newIndex]);
+        commitInput(inputs[newIndex]);
       }
       return;
     }
 
     if (ch && !key.ctrl && !key.meta) {
-      setInput(prev => prev + ch);
+      commitInput(inputRef.current + ch);
     }
   });
 
