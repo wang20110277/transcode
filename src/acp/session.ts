@@ -117,7 +117,11 @@ export class AcpSession {
     const signal = this.abortController.signal;
 
     try {
-      const systemPrompt = buildSystemPrompt(await loadProjectContext(this.cwd));
+      const provider =
+        process.env.TRANSCODE_MOCK === '1' ? undefined : createModel(this.modelSpec);
+      const systemPrompt = buildSystemPrompt(await loadProjectContext(this.cwd), {
+        modelName: provider?.config.name,
+      });
       if (this.messages[0]?.getType() === 'system') {
         this.messages[0] = new SystemMessage(systemPrompt);
       } else {
@@ -126,8 +130,6 @@ export class AcpSession {
 
       this.messages.push(new HumanMessage(text));
 
-      const provider =
-        process.env.TRANSCODE_MOCK === '1' ? undefined : createModel(this.modelSpec);
       const result = await runAgentLoop({
         model: provider?.model,
         cwd: this.cwd,

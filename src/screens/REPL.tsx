@@ -103,18 +103,22 @@ export default function REPL({ ctx }: REPLProps) {
       addHistory({ input: text, output: '' });
 
       try {
-        const systemPrompt = buildSystemPrompt(await loadProjectContext(process.cwd()));
+        const provider =
+          process.env.TRANSCODE_MOCK === '1'
+            ? undefined
+            : createProvider(ctx.modelId);
+
+        const projectContext = await loadProjectContext(process.cwd());
+        const systemPrompt = buildSystemPrompt(
+          projectContext,
+          provider ? { modelName: provider.config.name } : undefined,
+        );
         if (messagesRef.current[0]?.getType() === 'system') {
           messagesRef.current[0] = new SystemMessage(systemPrompt);
         } else {
           messagesRef.current.unshift(new SystemMessage(systemPrompt));
         }
         messagesRef.current.push(new HumanMessage(text));
-
-        const provider =
-          process.env.TRANSCODE_MOCK === '1'
-            ? undefined
-            : createProvider(ctx.modelId);
 
         let lastWasTool = false;
         const result = await runAgentLoop({

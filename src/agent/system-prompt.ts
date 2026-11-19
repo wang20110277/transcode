@@ -53,10 +53,19 @@ export async function loadProjectContext(cwd: string): Promise<ProjectContext> {
   return { cwd, gitBranch: await gitBranch(cwd), projectFiles };
 }
 
-export function buildSystemPrompt(context: ProjectContext): string {
+export function buildSystemPrompt(
+  context: ProjectContext,
+  options?: { modelName?: string },
+): string {
+  const poweredBy = options?.modelName ? `, powered by the ${options.modelName} model` : '';
   const sections: string[] = [
-    'You are transcode, a coding agent running as a local CLI agent in a terminal.',
+    `You are transcode${poweredBy}, a coding agent running as a local CLI agent in a terminal.`,
     'You work directly in the user-provided workspace and can read, search, edit and execute code.',
+    ...(options?.modelName
+      ? [
+          `When asked which model or company you are, answer that you are transcode running on ${options.modelName}. Never claim to be a different model or company.`,
+        ]
+      : []),
     '',
     '## Environment',
     `- Workspace: ${context.cwd}`,
