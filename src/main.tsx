@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { envModelLabel, getAvailableModels, preferredModelId, type ModelId } from './provider/provider.js';
 import { type CommandContext } from './commands.js';
 import REPL from './screens/REPL.js';
+import { bannerLines } from './screens/banner.js';
 import { createKeyedStdin } from './tui/keyed-stdin.js';
 import { VERSION } from './version.js';
 const DEFAULT_MODEL: ModelId = preferredModelId() ?? 'opus';
@@ -11,10 +12,7 @@ function Banner({ modelId, cwd, envLabel }: { modelId: ModelId; cwd: string; env
   const models = getAvailableModels();
   const current = models.find(m => m.id === modelId);
 
-  const logo = `
-  ┌──────────────────────────────────────────────┐
-  │  T R A N S C O D E  ·  Multi-model Agent      │
-  └──────────────────────────────────────────────┘`
+  const logo = bannerLines('T R A N S C O D E  ·  Multi-model Agent');
 
   return (
     <Box flexDirection="column" marginBottom={1}>

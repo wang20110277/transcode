@@ -14,6 +14,7 @@ Environment:
   TRANSCODE_DEFAULT_PROVIDER Provider for bare model names (default: openai)
   TRANSCODE_PERMISSION_MODE  ask | auto | readonly (default: ask in ACP mode;
                             switch at runtime in the REPL with /mode)
+  TRANSCODE_MAX_TURNS        Agent tool-call turn cap (default: 200)
   ANTHROPIC_API_KEY / OPENAI_API_KEY / DEEPSEEK_API_KEY / ... provider keys
 
 Examples:

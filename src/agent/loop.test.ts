@@ -196,6 +196,161 @@ describe('runAgentLoop', () => {
       onEvent: () => {},
     });
 
-    expect(executions).toBe(4);
+    // Windowed rule: the trailing call is the third {"a":1} within the last
+    // 6 calls, so it is blocked even though the calls were not consecutive.
+    expect(executions).toBe(3);
+  });
+
+  test('alternating A-B-A-B loops are blocked by the windowed counter', async () => {
+    let aRuns = 0;
+    let bRuns = 0;
+    const tools: AgentTool[] = [
+      {
+        ...fakeTool,
+        name: 'A',
+        async execute() {
+          aRuns++;
+          return 'ok';
+        },
+      },
+      {
+        ...fakeTool,
+        name: 'B',
+        async execute() {
+          bRuns++;
+          return 'ok';
+        },
+      },
+    ];
+
+    await runAgentLoop({
+      model: scriptedModel([
+        { tool: 'A' },
+        { tool: 'B' },
+        { tool: 'A' },
+        { tool: 'B' },
+        { tool: 'A' },
+      ]),
+      cwd: '/tmp',
+      messages: [],
+      systemPrompt: 'test',
+      tools,
+      onEvent: () => {},
+    });
+
+    // A appears 3 times within the window → blocked on its third call.
+    expect(aRuns).toBe(2);
+    expect(bRuns).toBe(2);
+  });
+
+  test('hitting the turn cap is loud: event, notice message, stop reason', async () => {
+    const events: AgentEvent[] = [];
+    const infiniteTools = scriptedModel(
+      Array.from({ length: 20 }, () => ({ tool: 'fake' as const, args: '{"a":1}' })),
+    );
+
+    const result = await runAgentLoop({
+      model: infiniteTools,
+      cwd: '/tmp',
+      messages: [],
+      systemPrompt: 'test',
+      tools: [fakeTool],
+      maxTurns: 2,
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(result.stopReason).toBe('max_turn_requests');
+    expect(events.some((event) => event.type === 'max_turns_reached')).toBe(true);
+    const notice = result.messages.find(
+      (message) => message.getType() === 'ai' && message.content.toString().includes('maximum number of turns'),
+    );
+    expect(notice).toBeDefined();
+  });
+
+  test('TRANSCODE_MAX_TURNS overrides the default cap', async () => {
+    process.env.TRANSCODE_MAX_TURNS = '3';
+    try {
+      const events: AgentEvent[] = [];
+      const infiniteTools = scriptedModel(
+        Array.from({ length: 20 }, () => ({ tool: 'fake' as const, args: '{"a":1}' })),
+      );
+
+      const result = await runAgentLoop({
+        model: infiniteTools,
+        cwd: '/tmp',
+        messages: [],
+        systemPrompt: 'test',
+        tools: [fakeTool],
+        onEvent: (event) => events.push(event),
+      });
+
+      expect(result.stopReason).toBe('max_turn_requests');
+      // Circuit breaker blocks execution from the 3rd identical call, but
+      // every turn still emits a tool_result event.
+      expect(events.filter((event) => event.type === 'tool_result').length).toBe(3);
+    } finally {
+      delete process.env.TRANSCODE_MAX_TURNS;
+    }
+  });
+
+  test('nudges the model after prolonged exploration without any mutation', async () => {
+    // read-only tool (isMutating false): pure exploration, never "acts".
+    const exploreTool: AgentTool = {
+      ...fakeTool,
+      isMutating: false,
+      async execute() {
+        return 'ok';
+      },
+    };
+    // Vary args each call so the circuit breaker does not fire.
+    const steps = Array.from({ length: 40 }, (_, i) => ({
+      tool: 'fake' as const,
+      args: JSON.stringify({ n: i }),
+    }));
+
+    const result = await runAgentLoop({
+      model: scriptedModel(steps),
+      cwd: '/tmp',
+      messages: [],
+      systemPrompt: 'test',
+      tools: [exploreTool],
+      onEvent: () => {},
+    });
+
+    const nudge = result.messages.find(
+      (message) =>
+        message.getType() === 'ai' && message.content.toString().includes('Stop exploring'),
+    );
+    expect(nudge).toBeDefined();
+  });
+
+  test('no exploration nudge when the model acted early', async () => {
+    const writer: AgentTool = {
+      ...fakeTool,
+      isMutating: true,
+      async execute() {
+        return 'ok';
+      },
+    };
+    // Mutate on call 1, keep exploring afterwards.
+    const steps = Array.from({ length: 40 }, (_, i) => ({
+      tool: 'fake' as const,
+      args: JSON.stringify({ n: i }),
+    }));
+
+    const result = await runAgentLoop({
+      model: scriptedModel(steps),
+      cwd: '/tmp',
+      messages: [],
+      systemPrompt: 'test',
+      tools: [writer],
+      onEvent: () => {},
+    });
+
+    const nudge = result.messages.find(
+      (message) =>
+        message.getType() === 'ai' && message.content.toString().includes('Stop exploring'),
+    );
+    expect(nudge).toBeUndefined();
   });
 });

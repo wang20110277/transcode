@@ -189,6 +189,11 @@ export default function REPL({ ctx }: REPLProps) {
             if (event.type === 'text') {
               appendChatOutput(lastWasTool ? `\n${event.text}` : event.text);
               lastWasTool = false;
+            } else if (event.type === 'max_turns_reached') {
+              appendChatOutput(
+                `\n⚠ 已达轮次上限（${event.maxTurns}），任务未完成。输入"继续"接着做，或调大 TRANSCODE_MAX_TURNS。`,
+              );
+              lastWasTool = true;
             } else if (event.type === 'tool_call') {
               titlesById.set(event.toolCallId, event.title);
               pendingCalls++;

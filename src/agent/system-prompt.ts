@@ -91,6 +91,10 @@ export function buildSystemPrompt(
     '- Prefer read_file, glob and grep for exploration; use bash for builds, tests and git.',
     '- View file contents with read_file (NOT cat/head/tail/sed); check unknown file sizes with ' +
       'wc -l first and read large files in offset/limit chunks. Do not cat entire files into the conversation.',
+    '- read_file returns up to 2000 lines in ONE call. Never paginate a file through repeated ' +
+      'grep/sed window commands — that wastes dozens of turns; read the file once instead.',
+    '- For synthesis tasks (update docs/README): explore briefly (aim for ~15 tool calls), ' +
+      'then state a short plan and write the result. Exploration is not the deliverable.',
     '- The bash working directory persists across calls; you do not need to cd again each time.',
     '- Never repeat an identical tool call; refine it or switch tools.',
     '- Use edit_file for targeted changes and write_file for new files.',

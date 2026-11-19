@@ -195,6 +195,17 @@ export class AcpSession {
       return;
     }
 
+    if (event.type === 'max_turns_reached') {
+      this.host.sendUpdate(this.id, {
+        sessionUpdate: 'agent_message_chunk',
+        content: {
+          type: 'text',
+          text: `\n⚠ Reached maximum number of turns (${event.maxTurns}). The task is incomplete — say "continue" or raise TRANSCODE_MAX_TURNS.\n`,
+        },
+      });
+      return;
+    }
+
     if (event.type === 'tool_call') {
       this.host.sendUpdate(this.id, {
         sessionUpdate: 'tool_call',

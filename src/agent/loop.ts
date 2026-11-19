@@ -21,6 +21,7 @@ import {
 export type AgentEvent =
   | { type: 'text'; text: string }
   | { type: 'thought'; text: string }
+  | { type: 'max_turns_reached'; maxTurns: number }
   | {
       type: 'tool_call';
       toolCallId: string;
@@ -255,7 +256,10 @@ export async function runAgentLoop(
   }
 
   const tools = options.tools ?? AGENT_TOOLS;
-  const maxTurns = options.maxTurns ?? 50;
+  // Claude Code style: generous default cap (their subagents use 200),
+  // overridable via TRANSCODE_MAX_TURNS. Hitting it is loud, never silent.
+  const envTurns = Number(process.env.TRANSCODE_MAX_TURNS);
+  const maxTurns = options.maxTurns ?? (Number.isFinite(envTurns) && envTurns > 0 ? envTurns : 200);
   const toolSession = options.toolSession ?? createToolSession(options.cwd);
   if (!options.model) throw new Error('No model configured for the agent loop');
 
@@ -264,8 +268,18 @@ export async function runAgentLoop(
       ? options.model.bindTools(bindableTools(tools))
       : options.model;
 
-  let repeatedKey: string | undefined;
-  let repeatCount = 0;
+  // Windowed repetition tracking: the same call (name + args) occurring
+  // >= 3 times within the last 6 calls is refused, which catches both
+  // straight repeats (A,A,A) and alternating loops (A,B,A,B,A).
+  const recentKeys: string[] = [];
+
+  // Exploration stall detection: too many calls with zero mutations means
+  // the model is drilling instead of delivering (observed with DeepSeek:
+  // 272 read-only calls to "update a README"). Nudge it once mid-run.
+  const EXPLORE_STALL_THRESHOLD = 30;
+  let totalToolCalls = 0;
+  let hasActed = false;
+  let stallNudged = false;
 
   for (let turn = 0; turn < maxTurns; turn++) {
     if (options.signal?.aborted) return { stopReason: 'cancelled', messages };
@@ -322,18 +336,15 @@ export async function runAgentLoop(
       let result: { ok: boolean; output: string; diff?: string };
       let skippedPermission = false;
 
-      // Circuit breaker: the third consecutive identical call is refused
-      // instead of executed, with guidance to change approach.
+      // Circuit breaker (windowed): see recentKeys declaration.
       const key = `${call.name}:${stableKey(input)}`;
-      if (key === repeatedKey) repeatCount++;
-      else {
-        repeatedKey = key;
-        repeatCount = 1;
-      }
+      const occurrences = recentKeys.filter((recent) => recent === key).length + 1;
+      recentKeys.push(key);
+      if (recentKeys.length > 6) recentKeys.shift();
 
       if (!tool) {
         result = { ok: false, output: `Unknown tool: ${call.name}` };
-      } else if (repeatCount >= 3) {
+      } else if (occurrences >= 3) {
         result = { ok: false, output: `Error: ${REPEAT_GUIDANCE}` };
       } else {
         const readOnly = tool.isReadOnly?.(input) === true;
@@ -357,7 +368,12 @@ export async function runAgentLoop(
               session: toolSession,
             })
           : { ok: false, output: 'Permission denied by the client.' };
+
+        if (allowed && tool.isMutating && tool.isReadOnly?.(input) !== true) {
+          hasActed = true;
+        }
       }
+      totalToolCalls++;
 
       await options.onEvent({
         type: 'tool_result',
@@ -377,7 +393,25 @@ export async function runAgentLoop(
         }),
       );
     }
+
+    if (!hasActed && !stallNudged && totalToolCalls >= EXPLORE_STALL_THRESHOLD) {
+      stallNudged = true;
+      const nudge =
+        `You have made ${totalToolCalls} tool calls without producing any edits or output. ` +
+        'Stop exploring: synthesize what you already have and complete the task now ' +
+        '(edit or write the deliverable, or answer directly). If you need file contents, ' +
+        'read_file returns up to 2000 lines in one call — do not paginate with grep/sed windows.';
+      messages.push(new AIMessage({ content: nudge }));
+      await options.onEvent({ type: 'text', text: `\n⚠ ${nudge}\n` });
+    }
   }
 
+  // Record the cap in the conversation (like Claude Code's max_turns_reached
+  // attachment) and surface it as an event so no surface stays silent.
+  const notice = new AIMessage({
+    content: `Reached maximum number of turns (${maxTurns}). The task is incomplete — ask the user to say "continue" or raise TRANSCODE_MAX_TURNS.`,
+  });
+  messages.push(notice);
+  await options.onEvent({ type: 'max_turns_reached', maxTurns });
   return { stopReason: 'max_turn_requests', messages };
 }
