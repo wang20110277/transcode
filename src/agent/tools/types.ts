@@ -33,6 +33,8 @@ export interface AgentTool {
   schema: z.ZodObject<z.ZodRawShape>;
   kind: ToolKind;
   isMutating: boolean;
+  /** When true for a given input, a mutating tool may skip the permission prompt. */
+  isReadOnly?(input: Record<string, unknown>): boolean;
   title(input: Record<string, unknown>): string;
   execute(input: Record<string, unknown>, ctx: ToolContext): Promise<string | ToolOutput>;
 }

@@ -1,5 +1,6 @@
 import type { ModelId } from './provider/provider.js';
 import { getAvailableModels } from './provider/provider.js';
+import { getPermissionMode, PERMISSION_MODES, setPermissionMode } from './agent/permission.js';
 
 export interface CommandContext {
   modelId: ModelId;
@@ -45,6 +46,27 @@ const commands: Command[] = [
     execute: () => ({
       output: 'Analyzing the project and writing TRANS.md…',
     }),
+  },
+  {
+    name: 'mode',
+    description: 'Show or switch permission mode (ask | auto | readonly)',
+    execute: (args) => {
+      const target = args[0]?.toLowerCase();
+      if (!target) {
+        return {
+          output:
+            `Current permission mode: ${getPermissionMode()}\n` +
+            `Usage: /mode <${PERMISSION_MODES.join('|')}> — ` +
+            'ask prompts for mutating tools (read-only commands pass), ' +
+            'auto allows everything, readonly denies mutating tools.',
+        };
+      }
+      if (!PERMISSION_MODES.includes(target as never)) {
+        return { output: `Unknown mode: ${target}. Valid modes: ${PERMISSION_MODES.join(', ')}` };
+      }
+      setPermissionMode(target as never);
+      return { output: `Permission mode switched to ${target}` };
+    },
   },
   {
     name: 'clear',

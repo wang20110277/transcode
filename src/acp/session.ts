@@ -9,6 +9,7 @@ import {
 import { createModel, getAvailableModels, resolveModel } from '../provider/provider.js';
 import { runAgentLoop, type AgentEvent, type PermissionRequest } from '../agent/loop.js';
 import { createToolSession, type ToolSession } from '../agent/tools/index.js';
+import { getPermissionMode } from '../agent/permission.js';
 import { buildSystemPrompt, loadProjectContext } from '../agent/system-prompt.js';
 import {
   RPC_ERRORS,
@@ -66,9 +67,7 @@ function promptText(prompt: AcpPromptBlock[]): string {
 }
 
 function permissionMode(): 'ask' | 'auto' | 'readonly' {
-  const value = (process.env.TRANSCODE_PERMISSION_MODE ?? 'ask').toLowerCase();
-  if (value === 'auto' || value === 'readonly') return value;
-  return 'ask';
+  return getPermissionMode();
 }
 
 export class AcpSession {

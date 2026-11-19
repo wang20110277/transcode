@@ -5,6 +5,7 @@ import { findCommand, getCommands, type CommandContext } from '../commands.js';
 import { getAvailableModels, createProviderWithKey, createProvider, setPreferredModel, type ModelId } from '../provider/provider.js';
 import { runAgentLoop, type PermissionRequest } from '../agent/loop.js';
 import { createToolSession } from '../agent/tools/index.js';
+import { getPermissionMode } from '../agent/permission.js';
 import { walkFiles } from '../agent/tools/fs-utils.js';
 import { applyCompletion, filterFiles, mentionQuery } from './file-completion.js';
 import { renderDiff } from './diff-render.js';
@@ -120,7 +121,7 @@ export default function REPL({ ctx }: REPLProps) {
 
   const askInTerminal = useCallback(
     (request: PermissionRequest, signal: AbortSignal): Promise<boolean> => {
-      const mode = process.env.TRANSCODE_PERMISSION_MODE ?? 'ask';
+      const mode = getPermissionMode();
       if (mode === 'auto') return Promise.resolve(true);
       if (mode === 'readonly') return Promise.resolve(false);
       return new Promise<boolean>(resolve => {
@@ -180,7 +181,8 @@ export default function REPL({ ctx }: REPLProps) {
               appendChatOutput(`\n⚙ ${event.title}`);
               lastWasTool = true;
             } else if (event.type === 'tool_result') {
-              appendChatOutput(event.ok ? ' ✓' : ' ✗');
+              const marker = event.skippedPermission ? ' ✓ (read-only)' : event.ok ? ' ✓' : ' ✗';
+              appendChatOutput(marker);
               if (event.diff) appendChatOutput(`\n${renderDiff(event.diff)}`);
               lastWasTool = true;
             }

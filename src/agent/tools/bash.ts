@@ -6,6 +6,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import type { AgentTool } from './types.js';
 import type { ToolSession } from './session.js';
+import { isReadOnlyCommand } from './read-only.js';
 
 const MAX_BASH_OUTPUT = 30_000;
 const TRUNCATE_HEAD = 15_000;
@@ -220,6 +221,7 @@ export const bashTool: AgentTool = {
     'Prefer dedicated read/write/edit/glob/grep tools for file operations.',
   kind: 'execute',
   isMutating: true,
+  isReadOnly: (input) => isReadOnlyCommand(String(input.command ?? '')),
   schema: z.object({
     command: z.string().describe('Shell command to run'),
     timeout_ms: z.number().int().min(1000).max(600_000).nullable().optional().describe('Timeout in ms'),

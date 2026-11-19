@@ -12,7 +12,8 @@ Usage:
 Environment:
   TRANSCODE_MODEL           Default model (registry id or provider:model)
   TRANSCODE_DEFAULT_PROVIDER Provider for bare model names (default: openai)
-  TRANSCODE_PERMISSION_MODE  ask | auto | readonly (default: ask in ACP mode)
+  TRANSCODE_PERMISSION_MODE  ask | auto | readonly (default: ask in ACP mode;
+                            switch at runtime in the REPL with /mode)
   ANTHROPIC_API_KEY / OPENAI_API_KEY / DEEPSEEK_API_KEY / ... provider keys
 
 Examples:

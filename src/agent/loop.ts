@@ -37,6 +37,8 @@ export type AgentEvent =
       ok: boolean;
       /** Unified diff for UI rendering; not sent to the model. */
       diff?: string;
+      /** True when a mutating tool ran without prompting (read-only input). */
+      skippedPermission?: boolean;
     };
 
 export interface PermissionRequest {
@@ -302,10 +304,13 @@ export async function runAgentLoop(
       });
 
       let result: { ok: boolean; output: string; diff?: string };
+      let skippedPermission = false;
       if (!tool) {
         result = { ok: false, output: `Unknown tool: ${call.name}` };
       } else {
-        const needsPermission = tool.isMutating;
+        const readOnly = tool.isReadOnly?.(input) === true;
+        const needsPermission = tool.isMutating && !readOnly;
+        skippedPermission = tool.isMutating && readOnly;
         const allowed =
           !needsPermission || !options.requestPermission
             ? true
@@ -333,6 +338,7 @@ export async function runAgentLoop(
         output: result.output,
         ok: result.ok,
         diff: result.diff,
+        skippedPermission,
       });
 
       messages.push(
