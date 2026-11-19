@@ -1,7 +1,7 @@
 import { Box, Text, useInput, useApp } from 'ink';
 import { useState, useCallback, useRef } from 'react';
 import { findCommand, getCommands, type CommandContext } from '../commands.js';
-import { getAvailableModels, createProviderWithKey, createProvider, type ModelId } from '../provider/provider.js';
+import { getAvailableModels, createProviderWithKey, createProvider, setPreferredModel, type ModelId } from '../provider/provider.js';
 import { runAgentLoop, type PermissionRequest } from '../agent/loop.js';
 import { buildSystemPrompt, loadProjectContext } from '../agent/system-prompt.js';
 import { HumanMessage, SystemMessage, type BaseMessage } from '@langchain/core/messages';
@@ -174,6 +174,7 @@ export default function REPL({ ctx }: REPLProps) {
     try {
       createProviderWithKey(modelId, apiKey);
       ctx.setModelId(modelId);
+      setPreferredModel(modelId);
       const found = models.find(m => m.id === modelId);
       addHistory({ input: '••••••••', output: `Switched to ${found?.name ?? modelId}` });
     } catch {

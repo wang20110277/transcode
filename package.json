@@ -26,7 +26,8 @@
     "test:acp": "bun scripts/acp-smoke.ts",
     "test:acp:openai": "bun scripts/acp-openai-smoke.ts",
     "test:acp:real": "bun scripts/acp-real-smoke.ts",
-    "model:check": "bun scripts/model-check.ts"
+    "model:check": "bun scripts/model-check.ts",
+    "version": "bun scripts/sync-version.ts"
   },
   "dependencies": {
     "ink": "^5.1.0",

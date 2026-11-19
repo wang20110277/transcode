@@ -1,11 +1,11 @@
 import { render, Box, Text } from 'ink';
 import { useState } from 'react';
-import { envModelLabel, getAvailableModels, type ModelId } from './provider/provider.js';
+import { envModelLabel, getAvailableModels, preferredModelId, type ModelId } from './provider/provider.js';
 import { type CommandContext } from './commands.js';
 import REPL from './screens/REPL.js';
 import { createKeyedStdin } from './tui/keyed-stdin.js';
 import { VERSION } from './version.js';
-const DEFAULT_MODEL: ModelId = 'opus';
+const DEFAULT_MODEL: ModelId = preferredModelId() ?? 'opus';
 
 function Banner({ modelId, cwd, envLabel }: { modelId: ModelId; cwd: string; envLabel?: string }) {
   const models = getAvailableModels();
@@ -50,7 +50,8 @@ function App() {
 
   return (
     <Box flexDirection="column">
-      <Banner modelId={modelId} cwd={cwd} envLabel={envModelLabel()} />
+      {/* A saved model choice (from the models flow) wins over the env label */}
+      <Banner modelId={modelId} cwd={cwd} envLabel={preferredModelId() ? undefined : envModelLabel()} />
       <REPL ctx={ctx} />
     </Box>
   );

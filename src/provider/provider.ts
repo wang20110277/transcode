@@ -1,6 +1,7 @@
 import { ChatOpenAI } from '@langchain/openai';
 import { ChatAnthropic } from '@langchain/anthropic';
 import { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import { loadConfig, saveConfig } from '../config.js';
 
 export type ModelId = 'opus' | 'gpt' | 'deepseek' | 'glm' | 'minimax' | 'kimi';
 
@@ -294,7 +295,9 @@ export function envModelLabel(): string | undefined {
 
 export function createModel(spec?: string): TransProvider {
   const resolved = resolveModel(spec);
-  const apiKey = apiKeyFor(resolved.envKey);
+  // Keys entered in the REPL (`models` flow) take precedence over the
+  // environment, so switching models in the session actually works.
+  const apiKey = registeredApiKey(resolved.id) ?? apiKeyFor(resolved.envKey);
 
   if (!apiKey) {
     throw new Error(
@@ -352,6 +355,8 @@ export function createProviderWithKey(id: ModelId, apiKey: string): TransProvide
   const config = MODEL_REGISTRY[id];
   if (!config) throw new Error(`Unknown model: ${id}`);
 
+  registerApiKey(id, apiKey);
+
   const model =
     config.provider === 'anthropic'
       ? new ChatAnthropic({
@@ -370,4 +375,36 @@ export function createProviderWithKey(id: ModelId, apiKey: string): TransProvide
 /** @deprecated Use createModel instead. Kept for the existing REPL. */
 export function createProvider(id: ModelId): TransProvider {
   return createModel(id);
+}
+
+// ---- REPL key/model persistence (~/.transcode.json) ----
+
+const keyStore = new Map<string, string>(
+  Object.entries(loadConfig().apiKeys ?? {}),
+);
+
+/** Register an API key for a registry model and persist it to disk. */
+export function registerApiKey(id: ModelId, apiKey: string): void {
+  keyStore.set(id, apiKey);
+  const cfg = loadConfig();
+  cfg.apiKeys = { ...(cfg.apiKeys ?? {}), [id]: apiKey };
+  saveConfig(cfg);
+}
+
+/** Key registered via the REPL, if any (env vars are the fallback). */
+export function registeredApiKey(id: string): string | undefined {
+  return keyStore.get(id);
+}
+
+/** Model chosen in the REPL on a previous run, if any. */
+export function preferredModelId(): ModelId | undefined {
+  const saved = loadConfig().model;
+  return saved && isKnownModelId(saved) ? saved : undefined;
+}
+
+/** Persist the REPL's model choice for the next run. */
+export function setPreferredModel(id: ModelId): void {
+  const cfg = loadConfig();
+  cfg.model = id;
+  saveConfig(cfg);
 }
