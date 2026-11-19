@@ -1,14 +1,17 @@
 import { Box, Text, useInput, useApp } from 'ink';
 import { useState, useCallback, useRef } from 'react';
 import { findCommand, getCommands, type CommandContext } from '../commands.js';
-import { getAvailableModels, createProviderWithKey, type ModelId } from '../provider/provider.js';
+import { getAvailableModels, createProviderWithKey, createProvider, type ModelId } from '../provider/provider.js';
+import { runAgentLoop, type PermissionRequest } from '../agent/loop.js';
+import { buildSystemPrompt, loadProjectContext } from '../agent/system-prompt.js';
+import { HumanMessage, SystemMessage, type BaseMessage } from '@langchain/core/messages';
 
 interface HistoryEntry {
   input: string;
   output: string;
 }
 
-type PromptPhase = 'idle' | 'model_select' | 'model_apikey';
+type PromptPhase = 'idle' | 'model_select' | 'model_apikey' | 'permission';
 
 interface REPLProps {
   ctx: CommandContext;
@@ -45,6 +48,112 @@ export default function REPL({ ctx }: REPLProps) {
   const addHistory = useCallback((entry: HistoryEntry) => {
     setHistory(prev => [...prev, entry]);
   }, []);
+
+  // ---- chat state ----
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  const abortRef = useRef<AbortController | undefined>(undefined);
+  const messagesRef = useRef<BaseMessage[]>([]);
+  const pendingPermissionRef = useRef<{
+    request: PermissionRequest;
+    resolve: (allow: boolean) => void;
+  } | null>(null);
+
+  const setBusyBoth = useCallback((v: boolean) => {
+    busyRef.current = v;
+    setBusy(v);
+  }, []);
+
+  const appendChatOutput = useCallback((chunk: string) => {
+    setHistory(prev => {
+      if (prev.length === 0) return prev;
+      const next = [...prev];
+      const last = next[next.length - 1];
+      next[next.length - 1] = { ...last, output: last.output + chunk };
+      return next;
+    });
+  }, []);
+
+  const askInTerminal = useCallback(
+    (request: PermissionRequest, signal: AbortSignal): Promise<boolean> => {
+      const mode = process.env.TRANSCODE_PERMISSION_MODE ?? 'ask';
+      if (mode === 'auto') return Promise.resolve(true);
+      if (mode === 'readonly') return Promise.resolve(false);
+      return new Promise<boolean>(resolve => {
+        const settle = (allow: boolean) => {
+          signal.removeEventListener('abort', onAbort);
+          pendingPermissionRef.current = null;
+          setPhase('idle');
+          resolve(allow);
+        };
+        const onAbort = () => settle(false);
+        signal.addEventListener('abort', onAbort);
+        pendingPermissionRef.current = { request, resolve: settle };
+        setPhase('permission');
+      });
+    },
+    [],
+  );
+
+  const runChat = useCallback(
+    async (text: string) => {
+      setBusyBoth(true);
+      const controller = new AbortController();
+      abortRef.current = controller;
+      addHistory({ input: text, output: '' });
+
+      try {
+        const systemPrompt = buildSystemPrompt(await loadProjectContext(process.cwd()));
+        if (messagesRef.current[0]?.getType() === 'system') {
+          messagesRef.current[0] = new SystemMessage(systemPrompt);
+        } else {
+          messagesRef.current.unshift(new SystemMessage(systemPrompt));
+        }
+        messagesRef.current.push(new HumanMessage(text));
+
+        const provider =
+          process.env.TRANSCODE_MOCK === '1'
+            ? undefined
+            : createProvider(ctx.modelId);
+
+        let lastWasTool = false;
+        const result = await runAgentLoop({
+          model: provider?.model,
+          cwd: process.cwd(),
+          messages: messagesRef.current,
+          systemPrompt,
+          signal: controller.signal,
+          onEvent: event => {
+            if (event.type === 'text') {
+              appendChatOutput(lastWasTool ? `\n${event.text}` : event.text);
+              lastWasTool = false;
+            } else if (event.type === 'tool_call') {
+              appendChatOutput(`\n⚙ ${event.title}`);
+              lastWasTool = true;
+            } else if (event.type === 'tool_result') {
+              appendChatOutput(event.ok ? ' ✓' : ' ✗');
+              lastWasTool = true;
+            }
+          },
+          requestPermission: request => askInTerminal(request, controller.signal),
+        });
+
+        messagesRef.current = result.messages;
+        if (controller.signal.aborted) appendChatOutput('\n(cancelled)');
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        appendChatOutput(`\n⚠ ${message}`);
+        if (/api.?key/i.test(message)) {
+          appendChatOutput(`\n(run "models" to switch model + set key, or export its env var)`);
+        }
+      } finally {
+        setBusyBoth(false);
+        abortRef.current = undefined;
+        dragFlush();
+      }
+    },
+    [ctx.modelId, addHistory, appendChatOutput, askInTerminal, setBusyBoth, dragFlush],
+  );
 
   const enterModelSelect = useCallback(() => {
     const currentIdx = models.findIndex(m => m.id === ctx.modelId);
@@ -114,15 +223,23 @@ export default function REPL({ ctx }: REPLProps) {
       } else if (result.output) {
         addHistory({ input: trimmed, output: result.output });
       }
-    } else {
+    } else if (trimmed.startsWith('/')) {
+      // Explicit slash prefix means the user intended a command.
       addHistory({ input: trimmed, output: `Unknown command: ${cmdName}. Type "help" for available commands.` });
+    } else {
+      // Free text — converse with the current model.
+      commitInput('');
+      setHistoryIndex(-1);
+      setSavedInput('');
+      await runChat(trimmed);
+      return;
     }
     dragFlush();
 
     commitInput('');
     setHistoryIndex(-1);
     setSavedInput('');
-  }, [exit, ctx, phase, handleApiKey, addHistory, enterModelSelect, commitInput, dragFlush]);
+  }, [exit, ctx, phase, handleApiKey, addHistory, enterModelSelect, commitInput, dragFlush, runChat]);
 
   useInput((ch, key) => {
     if (process.env.TRANSCODE_DEBUG_KEYS === '1') {
@@ -130,6 +247,11 @@ export default function REPL({ ctx }: REPLProps) {
       console.error(`CB ${JSON.stringify(ch)} ret=${key.return} esc=${key.escape}`);
     }
     if (key.escape) {
+      // While generating, Esc cancels instead of exiting.
+      if (busyRef.current && abortRef.current) {
+        abortRef.current.abort();
+        return;
+      }
       if (phase !== 'idle') {
         setPhase('idle');
         setPendingModel(null);
@@ -138,6 +260,18 @@ export default function REPL({ ctx }: REPLProps) {
         return;
       }
       exit();
+      return;
+    }
+
+    if (phase === 'permission') {
+      if (ch === 'y' || ch === 'Y' || key.return) {
+        pendingPermissionRef.current?.resolve(true);
+        return;
+      }
+      if (ch === 'n' || ch === 'N') {
+        pendingPermissionRef.current?.resolve(false);
+        return;
+      }
       return;
     }
 
@@ -161,6 +295,7 @@ export default function REPL({ ctx }: REPLProps) {
     }
 
     if (key.return) {
+      if (busyRef.current) return; // still generating; Esc cancels
       handleSubmit(inputRef.current);
       return;
     }
@@ -221,7 +356,9 @@ export default function REPL({ ctx }: REPLProps) {
     ? 'model> '
     : phase === 'model_apikey'
       ? 'apikey> '
-      : '> ';
+      : phase === 'permission'
+        ? 'allow?> '
+        : '> ';
 
   return (
     <Box flexDirection="column" paddingX={1}>
@@ -240,6 +377,20 @@ export default function REPL({ ctx }: REPLProps) {
           )}
         </Box>
       ))}
+
+      {phase === 'permission' && pendingPermissionRef.current && (
+        <Box marginLeft={2}>
+          <Text color="yellow">
+            ⚙ {pendingPermissionRef.current.request.title} ({pendingPermissionRef.current.request.kind}) — allow? y/n
+          </Text>
+        </Box>
+      )}
+
+      {busy && phase === 'idle' && (
+        <Box marginLeft={2}>
+          <Text dimColor>… generating (Esc to cancel)</Text>
+        </Box>
+      )}
 
       {phase === 'model_select' && (
         <Box flexDirection="column" marginLeft={2}>

@@ -97,6 +97,12 @@ bun run test:acp:openai   # 真实 LangChain 流式 + 工具循环（本地假 O
 bun run test:acp:real     # 真实模型 + 真实工具调用（无 key 时自动跳过）
 ```
 
+npm 全局安装的用户可以自升级：
+
+```bash
+transcode upgrade         # 检查 registry 最新版并升级（开发安装会给出指引）
+```
+
 ## 接入 multica
 
 multica daemon 支持“自定义 runtime profile”：选择一个已支持的协议家族，但用你自己的可执行文件启动。transcode 实现的是 **ACP** 协议，因此用 `hermes` 家族接入。multica 会用 `<command> acp` 启动它。
