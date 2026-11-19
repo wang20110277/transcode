@@ -161,8 +161,8 @@ const readFileTool: AgentTool = {
   isMutating: false,
   schema: z.object({
     path: z.string().describe('File path, relative to the workspace root'),
-    offset: z.number().int().min(1).optional().describe('First line to read (1-based)'),
-    limit: z.number().int().min(1).max(5000).optional().describe('Maximum number of lines'),
+    offset: z.number().int().min(1).nullable().optional().describe('First line to read (1-based)'),
+    limit: z.number().int().min(1).max(5000).nullable().optional().describe('Maximum number of lines'),
   }),
   title: (input) => `read: ${String(input.path ?? '')}`,
   async execute(input, ctx) {
@@ -232,7 +232,7 @@ const editFileTool: AgentTool = {
     path: z.string().describe('File path, relative to the workspace root'),
     old_string: z.string().describe('Exact text to replace'),
     new_string: z.string().describe('Replacement text'),
-    replace_all: z.boolean().optional().describe('Replace every occurrence'),
+    replace_all: z.boolean().nullable().optional().describe('Replace every occurrence'),
   }),
   title: (input) => `patch: ${String(input.path ?? '')}`,
   async execute(input, ctx) {
@@ -274,7 +274,7 @@ const globTool: AgentTool = {
   isMutating: false,
   schema: z.object({
     pattern: z.string().describe('Glob pattern, matched against workspace-relative paths'),
-    path: z.string().optional().describe('Directory to search in (default: workspace root)'),
+    path: z.string().nullable().optional().describe('Directory to search in (default: workspace root)'),
   }),
   title: (input) => `search: ${String(input.pattern ?? '')}`,
   async execute(input, ctx) {
@@ -309,9 +309,9 @@ const grepTool: AgentTool = {
   isMutating: false,
   schema: z.object({
     pattern: z.string().describe('JavaScript regular expression to search for'),
-    path: z.string().optional().describe('Directory or file to search (default: workspace root)'),
-    include: z.string().optional().describe('Glob that file paths must match'),
-    ignore_case: z.boolean().optional().describe('Case-insensitive search'),
+    path: z.string().nullable().optional().describe('Directory or file to search (default: workspace root)'),
+    include: z.string().nullable().optional().describe('Glob that file paths must match'),
+    ignore_case: z.boolean().nullable().optional().describe('Case-insensitive search'),
   }),
   title: (input) => `search: ${String(input.pattern ?? '')}`,
   async execute(input, ctx) {
@@ -369,8 +369,8 @@ const bashTool: AgentTool = {
   isMutating: true,
   schema: z.object({
     command: z.string().describe('Shell command to run'),
-    timeout_ms: z.number().int().min(1000).max(600_000).optional().describe('Timeout in ms'),
-    description: z.string().optional().describe('Short description of what the command does'),
+    timeout_ms: z.number().int().min(1000).max(600_000).nullable().optional().describe('Timeout in ms'),
+    description: z.string().nullable().optional().describe('Short description of what the command does'),
   }),
   title: (input) => {
     const command = String(input.command ?? '');
