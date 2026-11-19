@@ -149,6 +149,12 @@ function defaultModelSpec(): string {
   const explicit = process.env.TRANSCODE_MODEL?.trim();
   if (explicit) return explicit;
 
+  // A model saved from the REPL `models` flow (~/.transcode.json) applies
+  // everywhere — REPL, ACP (`transcode acp`), and model checks — so an
+  // integration host without an explicit model gets the user's choice.
+  const preferred = preferredModelId();
+  if (preferred) return preferred;
+
   if (anthropicAuthToken() || anthropicGatewayUrl()) {
     const fable = fableModelName();
     if (fable) return `anthropic:${fable}`;
