@@ -143,6 +143,19 @@ function parseToolCalls(
   return calls;
 }
 
+const REPEAT_GUIDANCE =
+  'This exact command was already executed twice in a row with the same arguments; repeating it ' +
+  'will not produce new information. Change your approach: use read_file to view file contents, ' +
+  'narrow the search pattern, or answer from the results you already have.';
+
+function stableKey(value: unknown): string {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    return JSON.stringify(Object.keys(record).sort().map((key) => [key, record[key]]));
+  }
+  return JSON.stringify(value) ?? '';
+}
+
 function lastHumanText(messages: BaseMessage[]): string {
   for (let index = messages.length - 1; index >= 0; index--) {
     if (messages[index].getType() === 'human') {
@@ -251,6 +264,9 @@ export async function runAgentLoop(
       ? options.model.bindTools(bindableTools(tools))
       : options.model;
 
+  let repeatedKey: string | undefined;
+  let repeatCount = 0;
+
   for (let turn = 0; turn < maxTurns; turn++) {
     if (options.signal?.aborted) return { stopReason: 'cancelled', messages };
 
@@ -305,8 +321,20 @@ export async function runAgentLoop(
 
       let result: { ok: boolean; output: string; diff?: string };
       let skippedPermission = false;
+
+      // Circuit breaker: the third consecutive identical call is refused
+      // instead of executed, with guidance to change approach.
+      const key = `${call.name}:${stableKey(input)}`;
+      if (key === repeatedKey) repeatCount++;
+      else {
+        repeatedKey = key;
+        repeatCount = 1;
+      }
+
       if (!tool) {
         result = { ok: false, output: `Unknown tool: ${call.name}` };
+      } else if (repeatCount >= 3) {
+        result = { ok: false, output: `Error: ${REPEAT_GUIDANCE}` };
       } else {
         const readOnly = tool.isReadOnly?.(input) === true;
         const needsPermission = tool.isMutating && !readOnly;

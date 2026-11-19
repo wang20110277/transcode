@@ -28,6 +28,31 @@ function stubModel(): BaseChatModel {
   return { bindTools: () => runnable } as unknown as BaseChatModel;
 }
 
+type ScriptStep = { tool: string; args?: string } | { text: string };
+
+/** Replays a scripted sequence: one step per stream call, then ends. */
+function scriptedModel(steps: ScriptStep[]): BaseChatModel {
+  let calls = 0;
+  const runnable = {
+    async stream(): Promise<AsyncIterable<{ content: unknown; tool_call_chunks?: unknown[] }>> {
+      const step = steps[calls++] ?? { text: 'done' };
+      const chunk =
+        'tool' in step
+          ? new AIMessageChunk({
+              content: '',
+              tool_call_chunks: [
+                { id: `call_${calls}`, name: step.tool, args: step.args ?? '{}', index: 0 },
+              ],
+            })
+          : new AIMessageChunk({ content: step.text });
+      return (async function* () {
+        yield chunk;
+      })();
+    },
+  };
+  return { bindTools: () => runnable } as unknown as BaseChatModel;
+}
+
 const fakeTool: AgentTool = {
   name: 'fake',
   description: 'test double',
@@ -109,5 +134,68 @@ describe('runAgentLoop', () => {
       },
     });
     expect(permissionAsked).toBe(1);
+  });
+
+  test('blocks the third consecutive identical call and guides the model', async () => {
+    let executions = 0;
+    const countingTool: AgentTool = {
+      ...fakeTool,
+      async execute() {
+        executions++;
+        return 'ok';
+      },
+    };
+    const events: AgentEvent[] = [];
+
+    const result = await runAgentLoop({
+      model: scriptedModel([
+        { tool: 'fake', args: '{"a":1}' },
+        { tool: 'fake', args: '{"a":1}' },
+        { tool: 'fake', args: '{"a":1}' },
+        { tool: 'fake', args: '{"a":1}' },
+      ]),
+      cwd: '/tmp',
+      messages: [],
+      systemPrompt: 'test',
+      tools: [countingTool],
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(result.stopReason).toBe('end_turn');
+    expect(executions).toBe(2);
+    const results = events.filter((event) => event.type === 'tool_result');
+    expect(results.length).toBe(4);
+    const blocked = results[2];
+    expect(blocked && blocked.type === 'tool_result' ? blocked.ok : true).toBe(false);
+    expect(blocked && blocked.type === 'tool_result' ? blocked.output : '').toMatch(
+      /already executed/i,
+    );
+  });
+
+  test('a different call resets the repetition counter', async () => {
+    let executions = 0;
+    const countingTool: AgentTool = {
+      ...fakeTool,
+      async execute() {
+        executions++;
+        return 'ok';
+      },
+    };
+
+    await runAgentLoop({
+      model: scriptedModel([
+        { tool: 'fake', args: '{"a":1}' },
+        { tool: 'fake', args: '{"a":1}' },
+        { tool: 'fake', args: '{"a":2}' },
+        { tool: 'fake', args: '{"a":1}' },
+      ]),
+      cwd: '/tmp',
+      messages: [],
+      systemPrompt: 'test',
+      tools: [countingTool],
+      onEvent: () => {},
+    });
+
+    expect(executions).toBe(4);
   });
 });

@@ -9,6 +9,7 @@ import { getPermissionMode } from '../agent/permission.js';
 import { walkFiles } from '../agent/tools/fs-utils.js';
 import { applyCompletion, filterFiles, mentionQuery } from './file-completion.js';
 import { renderDiff } from './diff-render.js';
+import { createTurnStats, recordCall, shouldCollapse, summaryLine } from './turn-summary.js';
 import { buildSystemPrompt, INIT_PROMPT, loadProjectContext } from '../agent/system-prompt.js';
 import { HumanMessage, SystemMessage, type BaseMessage } from '@langchain/core/messages';
 
@@ -39,6 +40,13 @@ export default function REPL({ ctx }: REPLProps) {
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [savedInput, setSavedInput] = useState('');
   const [phase, setPhase] = useState<PromptPhase>('idle');
+  // Live tool activity while generating; collapsed into a summary at turn end.
+  const [liveTool, setLiveTool] = useState<{
+    title: string;
+    index: number;
+    ok: number;
+    fail: number;
+  } | null>(null);
   const [pendingModel, setPendingModel] = useState<ModelId | null>(null);
   const [modelCursor, setModelCursor] = useState(0);
 
@@ -166,6 +174,10 @@ export default function REPL({ ctx }: REPLProps) {
         messagesRef.current.push(new HumanMessage(text));
 
         let lastWasTool = false;
+        const stats = createTurnStats();
+        const titlesById = new Map<string, string>();
+        const bufferedLines: string[] = [];
+        let pendingCalls = 0;
         const result = await runAgentLoop({
           model: provider?.model,
           cwd: process.cwd(),
@@ -178,17 +190,36 @@ export default function REPL({ ctx }: REPLProps) {
               appendChatOutput(lastWasTool ? `\n${event.text}` : event.text);
               lastWasTool = false;
             } else if (event.type === 'tool_call') {
-              appendChatOutput(`\n⚙ ${event.title}`);
+              titlesById.set(event.toolCallId, event.title);
+              pendingCalls++;
+              setLiveTool({ title: event.title, index: pendingCalls, ok: stats.ok, fail: stats.fail });
               lastWasTool = true;
             } else if (event.type === 'tool_result') {
+              const title = titlesById.get(event.toolCallId) ?? event.name;
               const marker = event.skippedPermission ? ' ✓ (read-only)' : event.ok ? ' ✓' : ' ✗';
-              appendChatOutput(marker);
-              if (event.diff) appendChatOutput(`\n${renderDiff(event.diff)}`);
+              recordCall(stats, event.name, event.ok);
+              setLiveTool(prev =>
+                prev ? { ...prev, ok: stats.ok, fail: stats.fail } : prev,
+              );
+              if (event.diff) {
+                // Edits and writes stay visible immediately — rare and important.
+                appendChatOutput(`\n⚙ ${title} ${marker}\n${renderDiff(event.diff)}`);
+              } else {
+                bufferedLines.push(`\n⚙ ${title} ${marker}`);
+              }
               lastWasTool = true;
             }
           },
           requestPermission: request => askInTerminal(request, controller.signal),
         });
+
+        // Collapse long turns into one summary line; short turns stay expanded.
+        if (shouldCollapse(stats)) {
+          const line = summaryLine(stats);
+          if (line) appendChatOutput(`\n${line}`);
+        } else {
+          for (const line of bufferedLines) appendChatOutput(line);
+        }
 
         messagesRef.current = result.messages;
         if (controller.signal.aborted) appendChatOutput('\n(cancelled)');
@@ -201,6 +232,7 @@ export default function REPL({ ctx }: REPLProps) {
       } finally {
         setBusyBoth(false);
         abortRef.current = undefined;
+        setLiveTool(null);
         // The agent may have created/removed files; rebuild @-completion list.
         setFileList(null);
         dragFlush();
@@ -472,8 +504,15 @@ export default function REPL({ ctx }: REPLProps) {
       )}
 
       {busy && phase === 'idle' && (
-        <Box marginLeft={2}>
+        <Box marginLeft={2} flexDirection="column">
           <Text dimColor>… generating (Esc to cancel)</Text>
+          {liveTool && (
+            <Text dimColor>
+              ⚙{' '}
+              {liveTool.title.length > 64 ? `${liveTool.title.slice(0, 64)}…` : liveTool.title}
+              {' '}· call {liveTool.index} · {liveTool.ok}✓ {liveTool.fail}✗
+            </Text>
+          )}
         </Box>
       )}
 

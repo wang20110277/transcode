@@ -7,8 +7,15 @@ import { createToolSession, type ToolSession } from './session.js';
 import type { ToolContext } from './types.js';
 
 describe('bash tool wiring', () => {
-  test('description steers file viewing to read_file', () => {
-    expect(bashTool.description).toContain('read_file');
+  test('description uses claudecode-style hard wording against file dumps', () => {
+    const d = bashTool.description;
+    expect(d).toContain('IMPORTANT');
+    expect(d).toContain('NOT cat');
+    expect(d).toContain('NOT sed');
+    expect(d).toContain('glob');
+    expect(d).toContain('write_file');
+    expect(d).toContain('Never repeat');
+    expect(d).toContain('absolute paths');
   });
 
   test('isReadOnly is wired to the analyzer', () => {

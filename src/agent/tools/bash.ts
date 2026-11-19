@@ -216,10 +216,19 @@ function killProcessGroup(pid: number | undefined, signal: NodeJS.Signals): void
 export const bashTool: AgentTool = {
   name: 'bash',
   description:
-    'Run a shell command in the workspace using the user shell. Working directory changes (cd) ' +
-    'persist across calls. Returns stdout, stderr and the exit code. ' +
-    'For viewing file contents use read_file (line-capped, paginates with offset/limit) — ' +
-    'cat/sed dumps of entire files waste context.',
+    'Run a shell command in the workspace using the user shell. The working directory persists ' +
+    'between calls. Returns stdout, stderr and the exit code.\n' +
+    'IMPORTANT: Avoid using this tool for `find`, `grep`, `cat`, `head`, `tail`, `sed`, `awk` or ' +
+    '`echo` unless explicitly instructed or you have verified a dedicated tool cannot do it:\n' +
+    '- Find files: Use glob (NOT find or ls)\n' +
+    '- Search content: Use the grep tool (NOT bash grep/rg)\n' +
+    '- Read files: Use read_file (NOT cat/head/tail); it caps lines and paginates with offset/limit\n' +
+    '- Edit files: Use edit_file (NOT sed/awk)\n' +
+    '- Write files: Use write_file (NOT echo > or cat <<EOF)\n' +
+    'Dedicated tools are capped, paginated and easier to review.\n' +
+    '- Never repeat an identical command; if the result was not useful, refine it or switch tools.\n' +
+    '- Independent commands: make separate bash calls in one message instead of one long && chain.\n' +
+    '- Prefer absolute paths over cd; keep one working directory per task.',
   kind: 'execute',
   isMutating: true,
   isReadOnly: (input) => isReadOnlyCommand(String(input.command ?? '')),
