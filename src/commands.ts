@@ -71,6 +71,24 @@ const commands: Command[] = [
     },
   },
   {
+    name: 'new',
+    description: 'Start a new conversation',
+    // Intercepted by the REPL (needs messagesRef/toolSession state).
+    execute: () => ({ output: 'Starting a new conversation…' }),
+  },
+  {
+    name: 'sessions',
+    description: 'List/search saved conversations (optionally by keyword)',
+    // Intercepted by the REPL.
+    execute: () => ({ output: 'Listing conversations…' }),
+  },
+  {
+    name: 'resume',
+    description: 'Resume a saved conversation (/resume <序号|id|标题片段>)',
+    // Intercepted by the REPL.
+    execute: () => ({ output: 'Resuming…' }),
+  },
+  {
     name: 'route',
     description: 'Show or set role→model routing (analysis/design/vision/…)',
     execute: (args) => {

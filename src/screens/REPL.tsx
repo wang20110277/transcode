@@ -19,6 +19,13 @@ import { loadConfig } from '../config.js';
 import { runAgentLoop, type PermissionRequest } from '../agent/loop.js';
 import { createToolSession } from '../agent/tools/index.js';
 import { getPermissionMode } from '../agent/permission.js';
+import {
+  generateTitle,
+  getSession,
+  listSessions,
+  saveSession,
+  searchSessions,
+} from '../sessions/store.js';
 import { walkFiles } from '../agent/tools/fs-utils.js';
 import { applyCompletion, filterFiles, mentionQuery } from './file-completion.js';
 import { renderDiff } from './diff-render.js';
@@ -108,6 +115,10 @@ export default function REPL({ ctx }: REPLProps) {
   // One tool session per process: bash cwd and read-file state persist
   // across prompts, like the ACP session.
   const toolSessionRef = useRef(createToolSession(process.cwd()));
+  // Conversation persistence: lazily created record + model-generated title.
+  const conversationRef = useRef<{ id: string; createdAt: number; titled: boolean } | null>(null);
+  const conversationTitleRef = useRef('');
+  const lastSessionsRef = useRef<string[]>([]);
 
   // @-mention file completion: lazy file list, active query, dismissed flag.
   const [fileList, setFileList] = useState<string[] | null>(null);
@@ -214,6 +225,7 @@ export default function REPL({ ctx }: REPLProps) {
         messagesRef.current.push(new HumanMessage(text));
 
         let lastWasTool = false;
+        let turnAssistantText = '';
         const stats = createTurnStats();
         const titlesById = new Map<string, string>();
         const bufferedLines: string[] = [];
@@ -231,6 +243,7 @@ export default function REPL({ ctx }: REPLProps) {
           onEvent: event => {
             if (event.type === 'text') {
               appendChatOutput(lastWasTool ? `\n${event.text}` : event.text);
+              turnAssistantText += event.text;
               lastWasTool = false;
             } else if (event.type === 'max_turns_reached') {
               appendChatOutput(
@@ -273,6 +286,44 @@ export default function REPL({ ctx }: REPLProps) {
         }
 
         messagesRef.current = result.messages;
+
+        // Persist the conversation for /sessions and /resume.
+        if (!conversationRef.current) {
+          conversationRef.current = {
+            id: `ses_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+            createdAt: Date.now(),
+            titled: false,
+          };
+          conversationTitleRef.current = text.replace(/\s+/g, ' ').trim().slice(0, 24) || '新对话';
+        }
+        const conversation = conversationRef.current;
+        const persist = () =>
+          saveSession({
+            id: conversation.id,
+            title: conversationTitleRef.current,
+            createdAt: conversation.createdAt,
+            updatedAt: Date.now(),
+            cwd: process.cwd(),
+            model: ctx.modelId,
+            messages: messagesRef.current,
+          });
+        persist();
+        if (!conversation.titled && provider) {
+          conversation.titled = true;
+          const firstUserText = text;
+          void (async () => {
+            try {
+              conversationTitleRef.current = await generateTitle(
+                provider.model,
+                firstUserText,
+                turnAssistantText,
+              );
+            } catch {
+              // keep the derived fallback title
+            }
+            persist();
+          })();
+        }
         if (controller.signal.aborted) appendChatOutput('\n(cancelled)');
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -451,6 +502,76 @@ export default function REPL({ ctx }: REPLProps) {
       addHistory({ input: trimmed, output: 'Select a model (↑↓ to navigate, Enter to select):' });
       enterModelSelect();
       commitInput('');
+      dragFlush();
+      return;
+    }
+
+    if (cmdName === 'new') {
+      conversationRef.current = null;
+      conversationTitleRef.current = '';
+      messagesRef.current = [];
+      toolSessionRef.current = createToolSession(process.cwd());
+      addHistory({ input: trimmed, output: '已开始新对话。' });
+      commitInput('');
+      setHistoryIndex(-1);
+      setSavedInput('');
+      dragFlush();
+      return;
+    }
+
+    if (cmdName === 'sessions') {
+      const keyword = args.join(' ');
+      const found = keyword.trim() ? searchSessions(keyword) : listSessions();
+      lastSessionsRef.current = found.map((session) => session.id);
+      const lines = found
+        .slice(0, 20)
+        .map(
+          (session, index) =>
+            `${index + 1}. ${session.title} · ${new Date(session.updatedAt).toLocaleString()} · ` +
+            `${session.model} · ${session.messages.length} 条`,
+        );
+      addHistory({
+        input: trimmed,
+        output: found.length
+          ? `${keyword.trim() ? `匹配“${keyword}”` : ''}${found.length} 个对话：\n${lines.join('\n')}\n/resume <序号|id|标题片段> 恢复`
+          : keyword.trim()
+            ? `没有匹配“${keyword}”的对话。`
+            : '暂无历史对话。',
+      });
+      commitInput('');
+      setHistoryIndex(-1);
+      setSavedInput('');
+      dragFlush();
+      return;
+    }
+
+    if (cmdName === 'resume') {
+      const target = args.join(' ').trim();
+      const list = listSessions();
+      let record = undefined as ReturnType<typeof getSession>;
+      if (/^\d+$/.test(target)) {
+        const indexed = lastSessionsRef.current[Number(target) - 1];
+        record = (indexed ? getSession(indexed) : undefined) ?? list[Number(target) - 1];
+      } else if (target) {
+        record = getSession(target) ?? list.find(
+          (session) => session.id.includes(target) || session.title.includes(target),
+        );
+      }
+      if (!record) {
+        addHistory({ input: trimmed, output: `未找到对话“${target || '(空)'}”。先 /sessions 查看列表。` });
+      } else {
+        conversationRef.current = { id: record.id, createdAt: record.createdAt, titled: true };
+        conversationTitleRef.current = record.title;
+        messagesRef.current = record.messages;
+        toolSessionRef.current = createToolSession(process.cwd());
+        addHistory({
+          input: trimmed,
+          output: `已恢复「${record.title}」（${record.messages.length} 条消息，${record.model}），继续对话。`,
+        });
+      }
+      commitInput('');
+      setHistoryIndex(-1);
+      setSavedInput('');
       dragFlush();
       return;
     }
