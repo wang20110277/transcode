@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { getRouting } from '../provider/provider.js';
 
 const CONTEXT_FILES = ['TRANS.md', 'AGENTS.md', 'CLAUDE.md', 'TRANSCODE.md', '.transcode/AGENTS.md'];
 const MAX_CONTEXT_CHARS = 40_000;
@@ -30,6 +31,21 @@ async function readOptional(file: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/** Advertises configured role routing so the model knows it can delegate. */
+function roleRoutingLines(): string[] {
+  const entries = Object.entries(getRouting()).filter(([role]) => role !== 'default');
+  if (entries.length === 0) return [];
+  const roles = entries.map(([role, profile]) => `${role}→${profile}`).join(', ');
+  return [
+    `- Sub-task delegation. Configured roles: ${roles}. Three tiers — ` +
+      'do it yourself for simple lookups; ask_model({role, prompt}) for one-shot expert ' +
+      'questions (analysis, design trade-offs, reviews, image description); ' +
+      'dispatch_agent({role, task, tools}) for multi-step research that needs file access — ' +
+      'the sub-agent runs its own tool loop and returns a final report (it cannot see this ' +
+      'conversation, so the task must be fully self-contained; dispatch asks the user first).',
+  ];
 }
 
 async function gitBranch(cwd: string): Promise<string | undefined> {
@@ -95,6 +111,11 @@ export function buildSystemPrompt(
       'grep/sed window commands — that wastes dozens of turns; read the file once instead.',
     '- For synthesis tasks (update docs/README): explore briefly (aim for ~15 tool calls), ' +
       'then state a short plan and write the result. Exploration is not the deliverable.',
+    '- Multi-step tasks (3+ steps): create the list with todo_write first, keep exactly one ' +
+      'step in_progress, and mark steps completed as you finish them.',
+    ...roleRoutingLines(),
+    '- Reporting counts (tests, checks, matches): grep -c counts matching LINES, including ' +
+      'definitions like `def check(` — read the actual item list instead of trusting a raw count.',
     '- The bash working directory persists across calls; you do not need to cd again each time.',
     '- Never repeat an identical tool call; refine it or switch tools.',
     '- Use edit_file for targeted changes and write_file for new files.',

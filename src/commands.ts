@@ -1,10 +1,12 @@
 import type { ModelId } from './provider/provider.js';
 import { getAvailableModels } from './provider/provider.js';
 import { getPermissionMode, PERMISSION_MODES, setPermissionMode } from './agent/permission.js';
+import { getRouting, resolveRole, setRouting } from './provider/provider.js';
 
 export interface CommandContext {
-  modelId: ModelId;
-  setModelId: (id: ModelId) => void;
+  /** Registry id (deepseek) or provider:model spec (deepseek:deepseek-reasoner). */
+  modelId: string;
+  setModelId: (id: string) => void;
   clearHistory: () => void;
 }
 
@@ -66,6 +68,39 @@ const commands: Command[] = [
       }
       setPermissionMode(target as never);
       return { output: `Permission mode switched to ${target}` };
+    },
+  },
+  {
+    name: 'route',
+    description: 'Show or set role→model routing (analysis/design/vision/…)',
+    execute: (args) => {
+      if (args.length === 0) {
+        const routing = getRouting();
+        const lines = Object.entries(routing).map(([role, profile]) => {
+          const resolved = resolveRole(role);
+          return `  ${role.padEnd(10)} → ${profile}${resolved ? ` (${resolved.model})` : ' ⚠ 未解析'}`;
+        });
+        return {
+          output:
+            `Role routing:\n${lines.length ? lines.join('\n') : '  (none)'}\n` +
+            'Usage: /route <role> <profile|-> — e.g. /route analysis glmc ; "-" removes the role',
+        };
+      }
+      const [role, profile] = args;
+      if (!role || !profile) {
+        return { output: 'Usage: /route <role> <profile|->' };
+      }
+      try {
+        setRouting(role, profile);
+        return {
+          output:
+            profile === '-'
+              ? `Role "${role}" removed.`
+              : `Role "${role}" → ${profile}`,
+        };
+      } catch (error) {
+        return { output: (error as Error).message };
+      }
     },
   },
   {

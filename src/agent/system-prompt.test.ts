@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, promises as fs, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { INIT_PROMPT, buildSystemPrompt, loadProjectContext } from './system-prompt.js';
+import { setRouting } from '../provider/provider.js';
 
 describe('buildSystemPrompt', () => {
   test('steers file inspection away from whole-file cat/sed dumps', () => {
@@ -13,6 +14,28 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('wc -l');
     expect(prompt).toContain('offset');
     expect(prompt.toLowerCase()).toContain('do not cat');
+  });
+
+  test('warns that grep -c counts definition lines too', () => {
+    const prompt = buildSystemPrompt({ cwd: '/tmp', projectFiles: [] });
+    expect(prompt).toContain('grep -c');
+  });
+
+  test('advertises configured role routing for ask_model delegation', async () => {
+    const configDir = await fs.mkdtemp(path.join(tmpdir(), 'transcode-prompt-route-'));
+    process.env.TRANSCODE_CONFIG_PATH = path.join(configDir, 'config.json');
+    try {
+      setRouting('analysis', 'glmc');
+      setRouting('design', 'opus');
+      const prompt = buildSystemPrompt({ cwd: '/tmp', projectFiles: [] });
+      expect(prompt).toContain('ask_model');
+      expect(prompt).toContain('dispatch_agent');
+      expect(prompt).toContain('analysis→glmc');
+      expect(prompt).toContain('design→opus');
+    } finally {
+      delete process.env.TRANSCODE_CONFIG_PATH;
+      await fs.rm(configDir, { recursive: true, force: true });
+    }
   });
 });
 

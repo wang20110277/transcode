@@ -2,7 +2,19 @@ import { Box, Text, useInput, useApp } from 'ink';
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import path from 'node:path';
 import { findCommand, getCommands, type CommandContext } from '../commands.js';
-import { getAvailableModels, createProviderWithKey, createProvider, setPreferredModel, type ModelId } from '../provider/provider.js';
+import {
+  getAvailableModels,
+  createProvider,
+  setPreferredModel,
+  registerApiKey,
+  lookupApiKey,
+  setCustomModel,
+  vendorModelSpec,
+  vendorModels,
+  verifyModel,
+  type ModelId,
+} from '../provider/provider.js';
+import { loadConfig } from '../config.js';
 import { runAgentLoop, type PermissionRequest } from '../agent/loop.js';
 import { createToolSession } from '../agent/tools/index.js';
 import { getPermissionMode } from '../agent/permission.js';
@@ -18,7 +30,15 @@ interface HistoryEntry {
   output: string;
 }
 
-type PromptPhase = 'idle' | 'model_select' | 'model_apikey' | 'permission';
+type PromptPhase =
+  | 'idle'
+  | 'model_select'
+  | 'model_pick'
+  | 'model_name'
+  | 'custom_baseurl'
+  | 'model_apikey'
+  | 'model_check'
+  | 'permission';
 
 interface REPLProps {
   ctx: CommandContext;
@@ -49,6 +69,13 @@ export default function REPL({ ctx }: REPLProps) {
   } | null>(null);
   const [pendingModel, setPendingModel] = useState<ModelId | null>(null);
   const [modelCursor, setModelCursor] = useState(0);
+  // Model selection flow: vendor → model → key (reused if saved) → check.
+  const [pickOptions, setPickOptions] = useState<string[]>([]);
+  const [pickCursor, setPickCursor] = useState(0);
+  const [pendingSpec, setPendingSpec] = useState<string | null>(null);
+  const [pendingDisplayName, setPendingDisplayName] = useState('');
+  const [keyHint, setKeyHint] = useState<string | null>(null);
+  const [customBaseDraft, setCustomBaseDraft] = useState('');
 
   const models = getAvailableModels();
   // Bun's scheduler can drop the render flush for updates issued from the
@@ -209,6 +236,9 @@ export default function REPL({ ctx }: REPLProps) {
               if (event.diff) {
                 // Edits and writes stay visible immediately — rare and important.
                 appendChatOutput(`\n⚙ ${title} ${marker}\n${renderDiff(event.diff)}`);
+              } else if (event.name === 'todo_write' || event.name === 'dispatch_agent') {
+                // Progress state and sub-agent reports: show immediately.
+                appendChatOutput(`\n${event.output}`);
               } else {
                 bufferedLines.push(`\n⚙ ${title} ${marker}`);
               }
@@ -252,36 +282,103 @@ export default function REPL({ ctx }: REPLProps) {
     setPhase('model_select');
   }, [ctx.modelId, models]);
 
-  const handleApiKey = useCallback((value: string) => {
-    const apiKey = value.trim();
-    const modelId = pendingModel!;
+  const maskKey = (key: string): string =>
+    key.length <= 8 ? '…****' : `${key.slice(0, 3)}…${key.slice(-4)}`;
 
-    if (!apiKey) {
-      addHistory({ input: '••••••••', output: 'API key cannot be empty.' });
-      enterModelSelect();
-      return;
-    }
+  const beginKeyStep = useCallback(
+    (spec: string, displayName: string) => {
+      const saved = lookupApiKey(spec);
+      setPendingSpec(spec);
+      setPendingDisplayName(displayName);
+      setKeyHint(saved ? maskKey(saved) : null);
+      setPhase('model_apikey');
+      commitInput('');
+    },
+    [commitInput],
+  );
 
-    try {
-      createProviderWithKey(modelId, apiKey);
-      ctx.setModelId(modelId);
-      setPreferredModel(modelId);
-      const found = models.find(m => m.id === modelId);
-      addHistory({ input: '••••••••', output: `Switched to ${found?.name ?? modelId}` });
-    } catch {
-      addHistory({ input: '••••••••', output: 'Failed to switch model. Invalid API key.' });
-    }
+  const applyModelSwitch = useCallback(
+    (spec: string, displayName: string, apiKey: string, checkMessage: string) => {
+      registerApiKey(spec.split(':')[0]!, apiKey);
+      ctx.setModelId(spec);
+      setPreferredModel(spec);
+      addHistory({
+        input: '••••••••',
+        output: `${checkMessage} — 已切换到 ${displayName}`,
+      });
+      setPendingSpec(null);
+      setPendingDisplayName('');
+      setKeyHint(null);
+      setPendingModel(null);
+      setPhase('idle');
+      dragFlush();
+    },
+    [ctx, addHistory, dragFlush],
+  );
 
-    setPendingModel(null);
-    setPhase('idle');
-  }, [pendingModel, ctx, addHistory, enterModelSelect, models]);
+  const handleApiKey = useCallback(
+    async (value: string) => {
+      const spec = pendingSpec!;
+      const savedKey = lookupApiKey(spec);
+      const apiKey = value.trim() || savedKey;
+
+      if (!apiKey) {
+        addHistory({ input: '••••••••', output: 'API key 不能为空。' });
+        return; // stay on the key prompt
+      }
+
+      if (process.env.TRANSCODE_SKIP_MODEL_CHECK === '1') {
+        applyModelSwitch(spec, pendingDisplayName, apiKey, '已跳过连通性测试');
+        return;
+      }
+
+      setPhase('model_check');
+      const result = await verifyModel(spec, apiKey);
+      if (result.ok) {
+        applyModelSwitch(spec, pendingDisplayName, apiKey, `✓ ${result.message}`);
+        return;
+      }
+      addHistory({
+        input: '••••••••',
+        output: `✗ 连通失败：${result.message}\n请重新输入 key（Esc 返回模型列表）`,
+      });
+      setPhase('model_apikey');
+      commitInput('');
+      dragFlush();
+    },
+    [pendingSpec, pendingDisplayName, addHistory, applyModelSwitch, commitInput, dragFlush],
+  );
 
   const handleSubmit = useCallback(async (raw: string) => {
     const trimmed = raw.trim();
     if (!trimmed) return;
 
-    if (phase === 'model_apikey') {
-      handleApiKey(trimmed);
+    if (phase === 'model_apikey' || phase === 'model_check') {
+      await handleApiKey(trimmed);
+      commitInput('');
+      return;
+    }
+
+    if (phase === 'custom_baseurl') {
+      if (!/^https?:\/\//.test(trimmed)) {
+        addHistory({ input: trimmed, output: '地址需以 http:// 或 https:// 开头。' });
+        return;
+      }
+      setCustomBaseDraft(trimmed);
+      setPhase('model_name');
+      commitInput('');
+      return;
+    }
+
+    if (phase === 'model_name') {
+      if (!trimmed) return;
+      if (pendingModel === null) {
+        // Custom gateway: base URL collected, now the model name.
+        setCustomModel({ baseUrl: customBaseDraft, model: trimmed });
+        beginKeyStep('custom', `custom/${trimmed}`);
+      } else {
+        beginKeyStep(vendorModelSpec(pendingModel, trimmed), `${pendingModel}/${trimmed}`);
+      }
       commitInput('');
       return;
     }
@@ -383,8 +480,22 @@ export default function REPL({ ctx }: REPLProps) {
     if (phase === 'model_select') {
       if (key.return) {
         const selected = models[modelCursor];
+        if (selected.id === 'custom') {
+          const saved = loadConfig().custom;
+          setPendingModel(null);
+          if (saved?.baseUrl && saved.model) {
+            beginKeyStep('custom', `custom/${saved.model}`);
+          } else {
+            setPhase('custom_baseurl');
+            commitInput('');
+          }
+          return;
+        }
         setPendingModel(selected.id);
-        setPhase('model_apikey');
+        const options = vendorModels(selected.id);
+        setPickOptions(options);
+        setPickCursor(0);
+        setPhase('model_pick');
         commitInput('');
         return;
       }
@@ -394,6 +505,30 @@ export default function REPL({ ctx }: REPLProps) {
       }
       if (key.downArrow) {
         setModelCursor(prev => (prev + 1) % models.length);
+        return;
+      }
+      return;
+    }
+
+    if (phase === 'model_pick') {
+      const total = pickOptions.length + 1; // + "自定义模型名…"
+      if (key.return) {
+        if (pickCursor >= pickOptions.length) {
+          setPhase('model_name');
+          commitInput('');
+          return;
+        }
+        const modelName = pickOptions[pickCursor]!;
+        beginKeyStep(vendorModelSpec(pendingModel!, modelName), `${pendingModel}/${modelName}`);
+        commitInput('');
+        return;
+      }
+      if (key.upArrow) {
+        setPickCursor(prev => (prev - 1 + total) % total);
+        return;
+      }
+      if (key.downArrow) {
+        setPickCursor(prev => (prev + 1) % total);
         return;
       }
       return;
@@ -475,12 +610,18 @@ export default function REPL({ ctx }: REPLProps) {
   });
 
   const promptLabel = phase === 'model_select'
-    ? 'model> '
-    : phase === 'model_apikey'
-      ? 'apikey> '
-      : phase === 'permission'
-        ? 'allow?> '
-        : '> ';
+    ? 'vendor> '
+    : phase === 'model_pick'
+      ? 'model> '
+      : phase === 'model_name'
+        ? pendingModel === null ? '自定义模型名> ' : '自定义模型名> '
+        : phase === 'custom_baseurl'
+          ? 'baseurl> '
+          : phase === 'model_apikey'
+            ? keyHint ? `apikey (回车沿用 ${keyHint})> ` : 'apikey> '
+            : phase === 'permission'
+              ? 'allow?> '
+              : '> ';
 
   return (
     <Box flexDirection="column" paddingX={1}>
@@ -534,6 +675,33 @@ export default function REPL({ ctx }: REPLProps) {
               )}
             </Box>
           ))}
+          <Text color="gray" dimColor>↑↓ 选择厂商 · Enter 进入模型列表</Text>
+        </Box>
+      )}
+
+      {phase === 'model_pick' && (
+        <Box flexDirection="column" marginLeft={2}>
+          {pickOptions.map((name, i) => (
+            <Box key={name}>
+              <Text color={i === pickCursor ? 'cyan' : undefined}>
+                {i === pickCursor ? '❯ ' : '  '}
+                {name}
+              </Text>
+            </Box>
+          ))}
+          <Box>
+            <Text color={pickCursor === pickOptions.length ? 'cyan' : 'gray'}>
+              {pickCursor === pickOptions.length ? '❯ ' : '  '}
+              自定义模型名…
+            </Text>
+          </Box>
+          <Text color="gray" dimColor>↑↓ 选择模型 · Enter 确认</Text>
+        </Box>
+      )}
+
+      {phase === 'model_check' && (
+        <Box marginLeft={2}>
+          <Text dimColor>… 测试连通性（{pendingDisplayName}）</Text>
         </Box>
       )}
 

@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
@@ -76,6 +77,45 @@ export async function walkFiles(root: string, signal?: AbortSignal): Promise<str
 
 function escapeRegex(value: string): string {
   return value.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+}
+
+function runGit(args: string[], cwd: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile('git', args, { cwd, timeout: 5000 }, (error, stdout) => {
+      if (error) reject(error);
+      else resolve(String(stdout));
+    });
+  });
+}
+
+/**
+ * Files under root, honoring .gitignore when inside a git repository:
+ * `git ls-files --cached --others --exclude-standard` gives exact git
+ * semantics for free. Falls back to the directory walk outside repos.
+ */
+export async function workspaceFiles(root: string, signal?: AbortSignal): Promise<string[]> {
+  try {
+    const topLevel = (await runGit(['rev-parse', '--show-toplevel'], root)).trim();
+    const listing = await runGit(
+      ['ls-files', '--cached', '--others', '--exclude-standard', '--full-name'],
+      root,
+    );
+    if (!topLevel || signal?.aborted) throw new Error('fallback');
+    // git reports physical paths (/private/var/... on macOS) while callers
+    // may hold symlinked ones (/var/...); normalize before filtering.
+    const physicalRoot = await fs.realpath(root);
+    const prefix = topLevel.endsWith(path.sep) ? topLevel : `${topLevel}${path.sep}`;
+    const files = listing
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => `${prefix}${line}`)
+      .filter((file) => file.startsWith(`${physicalRoot}${path.sep}`));
+    if (files.length === 0) throw new Error('fallback');
+    return files;
+  } catch {
+    return walkFiles(root, signal);
+  }
 }
 
 export function globToRegExp(pattern: string): RegExp {

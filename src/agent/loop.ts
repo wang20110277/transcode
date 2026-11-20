@@ -17,6 +17,7 @@ import {
   type ToolKind,
   type ToolSession,
 } from './tools/index.js';
+import { askRole, getRouting } from '../provider/provider.js';
 
 export type AgentEvent =
   | { type: 'text'; text: string }
@@ -56,6 +57,7 @@ export type StopReason =
   | 'end_turn'
   | 'cancelled'
   | 'max_turn_requests'
+  | 'stalled'
   | 'refusal';
 
 export interface AgentLoopOptions {
@@ -70,6 +72,8 @@ export interface AgentLoopOptions {
   requestPermission?: RequestPermission;
   /** Session state shared across tool calls (shell cwd, read files). Created when absent. */
   toolSession?: ToolSession;
+  /** Vision proxy override (tests). Default: routing.vision → askRole('vision'). */
+  describeImages?: (images: Array<{ data: string; mediaType: string }>) => Promise<string>;
 }
 
 export interface AgentLoopResult {
@@ -205,6 +209,7 @@ async function runMockTurn(
           cwd: toolSession.cwd,
           signal: options.signal,
           session: toolSession,
+          requestPermission: options.requestPermission,
         })
       : { ok: false, output: 'Permission denied.' };
 
@@ -277,9 +282,18 @@ export async function runAgentLoop(
   // the model is drilling instead of delivering (observed with DeepSeek:
   // 272 read-only calls to "update a README"). Nudge it once mid-run.
   const EXPLORE_STALL_THRESHOLD = 30;
+  // Hard rail: when the stall nudge is ignored, stop burning turns.
+  const STALL_GRACE_CALLS = 15;
+  // Wrap-up detection: the deliverable was already written, but the model
+  // keeps exploring instead of summarizing and ending its turn.
+  const WRAP_UP_GAP = 20;
   let totalToolCalls = 0;
+  let callsSinceAction = 0;
   let hasActed = false;
+  let hasDelivered = false; // a real file write happened (write_file/edit_file)
   let stallNudged = false;
+  let callsAtStallNudge = 0;
+  let wrapUpNudged = false;
 
   for (let turn = 0; turn < maxTurns; turn++) {
     if (options.signal?.aborted) return { stopReason: 'cancelled', messages };
@@ -333,7 +347,7 @@ export async function runAgentLoop(
         input,
       });
 
-      let result: { ok: boolean; output: string; diff?: string };
+      let result: { ok: boolean; output: string; diff?: string; images?: Array<{ data: string; mediaType: string }> };
       let skippedPermission = false;
 
       // Circuit breaker (windowed): see recentKeys declaration.
@@ -366,14 +380,22 @@ export async function runAgentLoop(
               cwd: toolSession.cwd,
               signal: options.signal,
               session: toolSession,
+              requestPermission: options.requestPermission,
             })
           : { ok: false, output: 'Permission denied by the client.' };
 
         if (allowed && tool.isMutating && tool.isReadOnly?.(input) !== true) {
           hasActed = true;
+          callsSinceAction = 0;
+          // "Delivered" means a file write; mutating bash is not a deliverable
+          // and must not trigger the wrap-up message.
+          if (tool.name === 'write_file' || tool.name === 'edit_file') {
+            hasDelivered = true;
+          }
         }
       }
       totalToolCalls++;
+      callsSinceAction++;
 
       await options.onEvent({
         type: 'tool_result',
@@ -385,9 +407,50 @@ export async function runAgentLoop(
         skippedPermission,
       });
 
+      // Image auto-proxy: when a vision role is routed (or a test describer
+      // is injected), images are converted to a text description so the
+      // primary model does not need multimodal support.
+      let toolContent:
+        | string
+        | Array<{ type: string; text?: string; image_url?: { url: string } }> = result.output;
+      if (result.images?.length) {
+        const describer =
+          options.describeImages ??
+          (getRouting().vision
+            ? (images: Array<{ data: string; mediaType: string }>) =>
+                askRole(
+                  'vision',
+                  '简要描述图片的关键信息；如果是报错/截图，逐字给出其中文本。',
+                  images,
+                )
+            : undefined);
+        if (describer) {
+          try {
+            const description = await describer(result.images);
+            toolContent = `${result.output}\n\n[vision] ${description}`;
+          } catch {
+            toolContent = [
+              { type: 'text', text: `${result.output}\n[vision 转述失败，原图已直接传入]` },
+              ...result.images.map((image) => ({
+                type: 'image_url',
+                image_url: { url: `data:${image.mediaType};base64,${image.data}` },
+              })),
+            ];
+          }
+        } else {
+          toolContent = [
+            { type: 'text', text: result.output },
+            ...result.images.map((image) => ({
+              type: 'image_url',
+              image_url: { url: `data:${image.mediaType};base64,${image.data}` },
+            })),
+          ];
+        }
+      }
+
       messages.push(
         new ToolMessage({
-          content: result.output,
+          content: toolContent,
           tool_call_id: toolCallId,
           name: call.name,
         }),
@@ -396,11 +459,38 @@ export async function runAgentLoop(
 
     if (!hasActed && !stallNudged && totalToolCalls >= EXPLORE_STALL_THRESHOLD) {
       stallNudged = true;
+      callsAtStallNudge = totalToolCalls;
       const nudge =
         `You have made ${totalToolCalls} tool calls without producing any edits or output. ` +
         'Stop exploring: synthesize what you already have and complete the task now ' +
         '(edit or write the deliverable, or answer directly). If you need file contents, ' +
         'read_file returns up to 2000 lines in one call — do not paginate with grep/sed windows.';
+      messages.push(new AIMessage({ content: nudge }));
+      await options.onEvent({ type: 'text', text: `\n⚠ ${nudge}\n` });
+    } else if (
+      !hasActed &&
+      stallNudged &&
+      totalToolCalls - callsAtStallNudge >= STALL_GRACE_CALLS
+    ) {
+      // Hard rail: the nudge was ignored. Fail fast and loudly instead of
+      // burning the remaining turns.
+      const notice =
+        `The agent made ${totalToolCalls} tool calls without starting the deliverable and ` +
+        'ignored the earlier reminder. Stopping to avoid wasting turns. Re-prompt with a more ' +
+        'specific instruction (name the exact file and what to change) or switch to a stronger model.';
+      messages.push(new AIMessage({ content: notice }));
+      await options.onEvent({ type: 'text', text: `\n⚠ ${notice}\n` });
+      return { stopReason: 'stalled', messages };
+    } else if (
+      hasDelivered &&
+      !wrapUpNudged &&
+      callsSinceAction >= WRAP_UP_GAP
+    ) {
+      wrapUpNudged = true;
+      const nudge =
+        `The deliverable has already been written, but you have made ${callsSinceAction} ` +
+        'more tool calls since. Run any final verification now if truly needed, then ' +
+        'reply with a summary of what changed and stop — further exploration is not needed.';
       messages.push(new AIMessage({ content: nudge }));
       await options.onEvent({ type: 'text', text: `\n⚠ ${nudge}\n` });
     }

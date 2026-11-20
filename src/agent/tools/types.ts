@@ -18,13 +18,23 @@ export interface ToolContext {
   signal?: AbortSignal;
   /** Session-scoped state shared across tool calls (shell cwd, read files). */
   session: ToolSession;
+  /** Forwarded permission asker, so nested agents respect the same gate. */
+  requestPermission?: (request: {
+    toolCallId: string;
+    name: string;
+    title: string;
+    kind: ToolKind;
+    input: Record<string, unknown>;
+  }) => Promise<boolean>;
 }
 
-/** Rich execute result: model-facing output plus an optional UI-facing diff. */
+/** Rich execute result: model-facing output plus optional extras. */
 export interface ToolOutput {
   output: string;
   /** Unified diff text for TUI rendering; never sent to the model. */
   diff?: string;
+  /** Base64 images sent to the model as multimodal content blocks. */
+  images?: Array<{ data: string; mediaType: string }>;
 }
 
 export interface AgentTool {
@@ -44,4 +54,6 @@ export interface InvokeResult {
   output: string;
   /** Unified diff text for UI rendering, when the tool produced one. */
   diff?: string;
+  /** Base64 images for multimodal-capable models. */
+  images?: Array<{ data: string; mediaType: string }>;
 }

@@ -8,6 +8,33 @@ import { lineDiff } from './diff.js';
 
 const SNIPPET_CONTEXT_LINES = 4;
 const NEW_FILE_DIFF_LINES = 20;
+const MAX_IMAGE_BYTES = 3_000_000;
+
+const IMAGE_MEDIA: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+};
+
+/** Reads workspace image paths into base64 blocks (shared with ask_model). */
+export async function readImageBlocks(
+  paths: string[],
+  ctx: { cwd: string },
+): Promise<Array<{ data: string; mediaType: string }>> {
+  const blocks: Array<{ data: string; mediaType: string }> = [];
+  for (const inputPath of paths) {
+    const absolute = resolveInsideWorkspace(ctx.cwd, String(inputPath));
+    const mediaType = IMAGE_MEDIA[path.extname(absolute).slice(1).toLowerCase()];
+    if (!mediaType) throw new Error(`Not an image file: ${inputPath}`);
+    const stat = await fs.stat(absolute);
+    if (stat.size > MAX_IMAGE_BYTES) throw new Error(`Image too large (>3MB): ${inputPath}`);
+    const buffer = await fs.readFile(absolute);
+    blocks.push({ data: buffer.toString('base64'), mediaType });
+  }
+  return blocks;
+}
 
 // Claude-style quote normalization: models emit straight quotes, files often
 // contain curly ones. Both sides are normalized before matching.
@@ -91,6 +118,24 @@ export const readFileTool: AgentTool = {
           'Use grep or bash (head/tail) to inspect it.',
       );
     }
+
+    // Images are returned as base64 multimodal blocks for vision models.
+    const mediaType = IMAGE_MEDIA[path.extname(absolute).slice(1).toLowerCase()];
+    if (mediaType) {
+      if (stat.size > MAX_IMAGE_BYTES) {
+        throw new Error(
+          `Image is ${(stat.size / 1_000_000).toFixed(1)} MB, above the 3 MB limit. ` +
+            'Downscale it before reading.',
+        );
+      }
+      const buffer = await fs.readFile(absolute);
+      markFileRead(ctx.session, absolute);
+      return {
+        output: `[image ${displayPath(ctx.cwd, absolute)}, ${stat.size} bytes, shown visually]`,
+        images: [{ data: buffer.toString('base64'), mediaType }],
+      };
+    }
+
     if (stat.size > MAX_READ_BYTES && !input.offset && !input.limit) {
       throw new Error(
         `File is ${stat.size} bytes. Pass offset/limit to read it in chunks.`,
@@ -189,51 +234,88 @@ export const editFileTool: AgentTool = {
   isMutating: true,
   schema: z.object({
     path: z.string().describe('File path, relative to the workspace root'),
-    old_string: z.string().describe('Exact text to replace'),
-    new_string: z.string().describe('Replacement text'),
+    old_string: z.string().nullable().optional().describe('Exact text to replace (single-edit mode)'),
+    new_string: z.string().nullable().optional().describe('Replacement text (single-edit mode)'),
     replace_all: z.boolean().nullable().optional().describe('Replace every occurrence'),
+    edits: z
+      .array(
+        z.object({
+          old_string: z.string().describe('Exact text to replace'),
+          new_string: z.string().describe('Replacement text'),
+          replace_all: z.boolean().nullable().optional().describe('Replace every occurrence'),
+        }),
+      )
+      .nullable()
+      .optional()
+      .describe('Multiple edits applied in order (multi-edit mode; preferred for 2+ changes)'),
   }),
   title: (input) => `patch: ${String(input.path ?? '')}`,
   async execute(input, ctx) {
     const absolute = resolveInsideWorkspace(ctx.cwd, String(input.path));
     requireRead(ctx.session, absolute, displayPath(ctx.cwd, absolute));
 
-    const oldString = String(input.old_string);
-    const newString = String(input.new_string);
-    if (oldString === newString) throw new Error('old_string and new_string are identical');
-
     const original = await fs.readFile(absolute, 'utf8');
+    const editList = Array.isArray(input.edits)
+      ? (input.edits as Array<{ old_string: string; new_string: string; replace_all?: boolean }>)
+      : [{ old_string: String(input.old_string), new_string: String(input.new_string), replace_all: input.replace_all === true }];
+    if (editList.length === 0) throw new Error('No edits given.');
 
-    const actualOld = findActualString(original, oldString);
-    if (actualOld === null) {
-      throw new Error('old_string was not found in the file. Read it again and use exact text.');
-    }
-    const occurrences = actualOld === '' ? 0 : original.split(actualOld).length - 1;
-    if (occurrences === 0) {
-      throw new Error('old_string was not found in the file. Read it again and use exact text.');
-    }
-    if (occurrences > 1 && input.replace_all !== true) {
-      throw new Error(
-        `old_string appears ${occurrences} times. Pass replace_all=true or include more context.`,
-      );
+    // Validate and apply every edit in memory first: a failure anywhere
+    // must leave the file untouched (atomic multi-edit).
+    const appliedNewStrings: string[] = [];
+    let updated = original;
+    let replacedCount = 0;
+    for (const edit of editList) {
+      const oldString = String(edit.old_string);
+      const newString = String(edit.new_string);
+      if (oldString === newString) throw new Error('old_string and new_string are identical');
+
+      const checkOld = oldString.replace(/\n+$/, '');
+      for (const previous of appliedNewStrings) {
+        if (checkOld !== '' && previous.includes(checkOld)) {
+          throw new Error(
+            'Cannot edit file: old_string is a substring of a new_string from a previous edit. ' +
+              'Merge those edits or reorder them.',
+          );
+        }
+      }
+
+      const actualOld = findActualString(updated, oldString);
+      if (actualOld === null) {
+        throw new Error('old_string was not found in the file. Read it again and use exact text.');
+      }
+      const occurrences = actualOld === '' ? 0 : updated.split(actualOld).length - 1;
+      if (occurrences === 0) {
+        throw new Error('old_string was not found in the file. Read it again and use exact text.');
+      }
+      if (occurrences > 1 && edit.replace_all !== true) {
+        throw new Error(
+          `old_string appears ${occurrences} times. Pass replace_all=true or include more context.`,
+        );
+      }
+
+      updated =
+        edit.replace_all === true
+          ? updated.split(actualOld).join(newString)
+          : updated.replace(actualOld, () => newString);
+      replacedCount += edit.replace_all === true ? occurrences : 1;
+      appliedNewStrings.push(newString);
     }
 
-    const updated =
-      input.replace_all === true
-        ? original.split(actualOld).join(newString)
-        : original.replace(actualOld, () => newString);
     await fs.writeFile(absolute, updated, 'utf8');
 
-    const replacedCount = input.replace_all === true ? occurrences : 1;
-    const before = original.split(actualOld)[0] ?? '';
-    const replacementLine = before.split(/\r?\n/).length - 1;
-    const snippetStart = Math.max(0, replacementLine - SNIPPET_CONTEXT_LINES);
-    const snippet = snippetAfterEdit(original, actualOld, newString, snippetStart);
+    let snippet = '';
+    if (editList.length === 1) {
+      const actualOld = findActualString(original, String(editList[0]!.old_string)) ?? '';
+      const before = original.split(actualOld)[0] ?? '';
+      const replacementLine = before.split(/\r?\n/).length - 1;
+      const snippetStart = Math.max(0, replacementLine - SNIPPET_CONTEXT_LINES);
+      snippet = `\n\n${snippetAfterEdit(original, actualOld, String(editList[0]!.new_string), snippetStart)}`;
+    }
 
     return {
       output:
-        `Replaced ${replacedCount} occurrence(s) in ${displayPath(ctx.cwd, absolute)}\n\n` +
-        `${snippet}`,
+        `Replaced ${replacedCount} occurrence(s) in ${displayPath(ctx.cwd, absolute)}${snippet}`,
       diff: lineDiff(original, updated) || undefined,
     };
   },

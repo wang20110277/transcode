@@ -3,7 +3,15 @@ import { ChatAnthropic } from '@langchain/anthropic';
 import { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { loadConfig, saveConfig } from '../config.js';
 
-export type ModelId = 'opus' | 'gpt' | 'deepseek' | 'glm' | 'minimax' | 'kimi';
+export type ModelId =
+  | 'opus'
+  | 'gpt'
+  | 'deepseek'
+  | 'glm'
+  | 'glmc'
+  | 'minimax'
+  | 'kimi'
+  | 'custom';
 
 export type ProviderKind = 'openai' | 'anthropic';
 
@@ -42,6 +50,16 @@ const MODEL_REGISTRY: Record<ModelId, ModelConfig> = {
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     envKey: 'GLM_API_KEY',
   },
+  glmc: {
+    name: 'GLM Coding Plan',
+    provider: 'openai',
+    // The GLM Coding Plan subscription only bills against the dedicated
+    // coding endpoint; the standard /api/paas/v4 endpoint answers 429
+    // "余额不足或无可用资源包" because the plan is not applied there.
+    model: 'glm-4.6',
+    baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+    envKey: 'GLM_API_KEY',
+  },
   minimax: {
     name: 'MiniMax',
     provider: 'openai',
@@ -56,7 +74,41 @@ const MODEL_REGISTRY: Record<ModelId, ModelConfig> = {
     baseUrl: 'https://api.moonshot.cn/v1',
     envKey: 'KIMI_API_KEY',
   },
+  custom: {
+    name: 'Custom (OpenAI 兼容网关)',
+    provider: 'openai',
+    model: '',
+    baseUrl: '',
+    envKey: 'TRANSCODE_API_KEY',
+  },
 };
+
+/** Curated model lists behind each vendor in the /models flow. */
+const VENDOR_MODELS: Partial<Record<ModelId, string[]>> = {
+  opus: ['claude-opus-4-20250514', 'claude-sonnet-4-20250514'],
+  gpt: ['gpt-4o', 'gpt-4o-mini'],
+  deepseek: ['deepseek-chat', 'deepseek-reasoner'],
+  glm: ['glm-4.6', 'glm-4.5', 'glm-4.5-air', 'glm-4-flash'],
+  glmc: ['glm-4.6', 'glm-4.5'],
+  minimax: ['MiniMax-Text-01'],
+  kimi: ['moonshot-v1-128k', 'moonshot-v1-8k'],
+};
+
+/** Registry id → spec prefix understood by resolveModel. */
+const SPEC_PREFIX: Record<string, string> = {
+  opus: 'anthropic',
+  gpt: 'openai',
+};
+
+export function vendorModels(id: ModelId): string[] {
+  if (id === 'custom') return [loadConfig().custom?.model ?? ''].filter(Boolean);
+  return VENDOR_MODELS[id] ?? [MODEL_REGISTRY[id]?.model ?? ''].filter(Boolean);
+}
+
+export function vendorModelSpec(id: ModelId, modelName: string): string {
+  const prefix = SPEC_PREFIX[id] ?? id;
+  return `${prefix}:${modelName}`;
+}
 
 const PROVIDER_DEFAULTS: Record<
   string,
@@ -74,6 +126,11 @@ const PROVIDER_DEFAULTS: Record<
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     envKey: 'GLM_API_KEY',
   },
+  glmc: {
+    provider: 'openai',
+    baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+    envKey: 'GLM_API_KEY',
+  },
   minimax: {
     provider: 'openai',
     baseUrl: 'https://api.minimax.chat/v1',
@@ -88,6 +145,11 @@ const PROVIDER_DEFAULTS: Record<
     provider: 'openai',
     baseUrl: 'https://api.moonshot.cn/v1',
     envKey: 'KIMI_API_KEY',
+  },
+  custom: {
+    provider: 'openai',
+    baseUrl: undefined,
+    envKey: 'TRANSCODE_API_KEY',
   },
 };
 
@@ -199,6 +261,21 @@ export function resolveModel(spec?: string): ResolvedModel {
 
   if (!raw) return resolveModel('opus');
 
+  // User profiles win over built-in registry ids (same name = override).
+  const profile = raw.includes(':') ? undefined : loadConfig().profiles?.[raw];
+  if (profile?.baseUrl && profile.model) {
+    return {
+      id: raw,
+      name: `${raw} · ${profile.model}`,
+      provider: 'openai',
+      model: profile.model,
+      baseUrl: profile.baseUrl,
+      envKey: profile.envKey ?? keyIdToEnvKey(profile.keyId) ?? 'TRANSCODE_API_KEY',
+      // Carried internally for key resolution; harmless extra field.
+      ...({ keyId: profile.keyId } as object),
+    } as ResolvedModel;
+  }
+
   if (raw.toLowerCase() === 'fable') {
     const fable = fableModelName();
     if (fable) {
@@ -215,6 +292,17 @@ export function resolveModel(spec?: string): ResolvedModel {
 
   if (isKnownModelId(raw)) {
     const cfg = MODEL_REGISTRY[raw];
+    if (raw === 'custom') {
+      const saved = loadConfig().custom;
+      return {
+        id: raw,
+        name: saved?.model ? `${cfg.name} · ${saved.model}` : cfg.name,
+        provider: cfg.provider,
+        model: saved?.model ?? '',
+        baseUrl: saved?.baseUrl ?? '',
+        envKey: cfg.envKey,
+      };
+    }
     return {
       id: raw,
       name: cfg.name,
@@ -231,13 +319,15 @@ export function resolveModel(spec?: string): ResolvedModel {
     const model = raw.slice(colon + 1);
     const defaults = PROVIDER_DEFAULTS[prefix];
     if (defaults && model) {
+      const custom = prefix === 'custom' ? loadConfig().custom : undefined;
       return {
         id: raw,
         name: `${prefix}/${model}`,
         provider: defaults.provider,
         model,
         baseUrl:
-          defaults.provider === 'anthropic' ? anthropicGatewayUrl() : defaults.baseUrl,
+          custom?.baseUrl ??
+          (defaults.provider === 'anthropic' ? anthropicGatewayUrl() : defaults.baseUrl),
         envKey: defaults.envKey,
       };
     }
@@ -303,7 +393,7 @@ export function createModel(spec?: string): TransProvider {
   const resolved = resolveModel(spec);
   // Keys entered in the REPL (`models` flow) take precedence over the
   // environment, so switching models in the session actually works.
-  const apiKey = registeredApiKey(resolved.id) ?? apiKeyFor(resolved.envKey);
+  const apiKey = lookupApiKey(resolved.id);
 
   if (!apiKey) {
     throw new Error(
@@ -312,36 +402,8 @@ export function createModel(spec?: string): TransProvider {
     );
   }
 
-  let model: BaseChatModel;
   const baseUrl = baseUrlFor(resolved);
-
-  if (resolved.provider === 'anthropic') {
-    // Only use bearer auth when there is no explicit ANTHROPIC_API_KEY, so a
-    // real Anthropic endpoint never receives both x-api-key and Authorization.
-    const authToken = process.env.ANTHROPIC_API_KEY?.trim() ? '' : anthropicAuthToken();
-    model = new ChatAnthropic({
-      modelName: resolved.model,
-      anthropicApiKey: apiKey,
-      ...(baseUrl ? { anthropicApiUrl: baseUrl } : {}),
-      ...(authToken ? { clientOptions: { authToken } } : {}),
-      temperature: 0,
-      maxTokens: maxTokens(),
-      // @langchain/anthropic defaults top_k/top_p to -1 and forwards them on
-      // every request. Strict Anthropic-compatible gateways reject that
-      // ("top_p is in (0, 1.0]"), so drop both keys unless explicitly set.
-      invocationKwargs: { top_k: undefined, top_p: undefined },
-      maxRetries: 1,
-    });
-  } else {
-    model = new ChatOpenAI({
-      modelName: resolved.model,
-      openAIApiKey: apiKey,
-      temperature: 0,
-      maxTokens: maxTokens(),
-      maxRetries: 1,
-      configuration: baseUrl ? { baseURL: baseUrl } : undefined,
-    });
-  }
+  const model = buildChatModel(resolved, apiKey, baseUrl, maxTokens());
 
   return {
     modelId: resolved.id,
@@ -356,9 +418,80 @@ export function createModel(spec?: string): TransProvider {
   };
 }
 
+function buildChatModel(
+  resolved: ResolvedModel,
+  apiKey: string,
+  baseUrl: string | undefined,
+  tokens: number,
+): BaseChatModel {
+  if (resolved.provider === 'anthropic') {
+    // Only use bearer auth when there is no explicit ANTHROPIC_API_KEY, so a
+    // real Anthropic endpoint never receives both x-api-key and Authorization.
+    const authToken = process.env.ANTHROPIC_API_KEY?.trim() ? '' : anthropicAuthToken();
+    return new ChatAnthropic({
+      modelName: resolved.model,
+      anthropicApiKey: apiKey,
+      ...(baseUrl ? { anthropicApiUrl: baseUrl } : {}),
+      ...(authToken ? { clientOptions: { authToken } } : {}),
+      temperature: 0,
+      maxTokens: tokens,
+      // @langchain/anthropic defaults top_k/top_p to -1 and forwards them on
+      // every request. Strict Anthropic-compatible gateways reject that
+      // ("top_p is in (0, 1.0]"), so drop both keys unless explicitly set.
+      invocationKwargs: { top_k: undefined, top_p: undefined },
+      maxRetries: 1,
+    });
+  }
+  if (!baseUrl && /custom/.test(resolved.id)) {
+    throw new Error('Custom gateway is not configured yet — set a base URL and model first.');
+  }
+  return new ChatOpenAI({
+    modelName: resolved.model,
+    openAIApiKey: apiKey,
+    temperature: 0,
+    maxTokens: tokens,
+    maxRetries: 1,
+    configuration: baseUrl ? { baseURL: baseUrl } : undefined,
+  });
+}
+
+/**
+ * Connectivity check used by the /models flow: one minimal completion with a
+ * short timeout. Returns a readable message for the UI either way.
+ */
+export async function verifyModel(
+  spec: string,
+  apiKeyOverride?: string,
+): Promise<{ ok: boolean; message: string }> {
+  const resolved = resolveModel(spec);
+  const apiKey = apiKeyOverride?.trim() || lookupApiKey(resolved.id);
+  if (!apiKey) {
+    return { ok: false, message: `缺少 API key（${resolved.envKey}），请先输入。` };
+  }
+
+  try {
+    const model = buildChatModel(resolved, apiKey, baseUrlFor(resolved), 16);
+    const response = (await Promise.race([
+      model.invoke('ping'),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('连接超时（10s）')), 10_000).unref?.(),
+      ),
+    ])) as { response_metadata?: { model_name?: string } };
+
+    const served = response?.response_metadata?.model_name;
+    return {
+      ok: true,
+      message: `连通正常${served ? `（实际模型 ${served}）` : ''}`,
+    };
+  } catch (error) {
+    const raw = (error as Error).message ?? String(error);
+    return { ok: false, message: raw.length > 300 ? `${raw.slice(0, 300)}…` : raw };
+  }
+}
+
 /** @deprecated Use createModel instead. Kept for the existing REPL. */
-export function createProviderWithKey(id: ModelId, apiKey: string): TransProvider {
-  const config = MODEL_REGISTRY[id];
+export function createProviderWithKey(id: string, apiKey: string): TransProvider {
+  const config = MODEL_REGISTRY[id as ModelId];
   if (!config) throw new Error(`Unknown model: ${id}`);
 
   registerApiKey(id, apiKey);
@@ -379,7 +512,7 @@ export function createProviderWithKey(id: ModelId, apiKey: string): TransProvide
 }
 
 /** @deprecated Use createModel instead. Kept for the existing REPL. */
-export function createProvider(id: ModelId): TransProvider {
+export function createProvider(id: string): TransProvider {
   return createModel(id);
 }
 
@@ -390,7 +523,7 @@ const keyStore = new Map<string, string>(
 );
 
 /** Register an API key for a registry model and persist it to disk. */
-export function registerApiKey(id: ModelId, apiKey: string): void {
+export function registerApiKey(id: string, apiKey: string): void {
   keyStore.set(id, apiKey);
   const cfg = loadConfig();
   cfg.apiKeys = { ...(cfg.apiKeys ?? {}), [id]: apiKey };
@@ -402,14 +535,125 @@ export function registeredApiKey(id: string): string | undefined {
   return keyStore.get(id);
 }
 
-/** Model chosen in the REPL on a previous run, if any. */
-export function preferredModelId(): ModelId | undefined {
-  const saved = loadConfig().model;
-  return saved && isKnownModelId(saved) ? saved : undefined;
+/** Test helper: forget all REPL-registered keys. */
+export function clearRegisteredApiKeys(): void {
+  keyStore.clear();
 }
 
-/** Persist the REPL's model choice for the next run. */
-export function setPreferredModel(id: ModelId): void {
+/**
+ * Resolves the API key for a spec or registry id: exact match first, then
+ * the vendor prefix ("deepseek:deepseek-reasoner" → "deepseek"), then any
+ * vendor sharing the same env credential family (glmc reuses the glm key),
+ * then the environment.
+ */
+export function lookupApiKey(specOrId: string): string | undefined {
+  const trimmed = specOrId.trim();
+  const prefix = trimmed.split(':')[0]!;
+  const candidates = [trimmed, prefix];
+  const resolved = resolveModel(trimmed);
+  for (const [id, config] of Object.entries(MODEL_REGISTRY)) {
+    if (config.envKey === resolved.envKey) candidates.push(id);
+  }
+  for (const candidate of candidates) {
+    const key = keyStore.get(candidate) ?? loadConfig().apiKeys?.[candidate];
+    if (key) return key;
+  }
+  return apiKeyFor(resolved.envKey) || undefined;
+}
+
+/** Persist the custom gateway chosen in the /models flow. */
+export function setCustomModel(custom: { baseUrl: string; model: string }): void {
+  const cfg = loadConfig();
+  cfg.custom = { baseUrl: custom.baseUrl, model: custom.model };
+  saveConfig(cfg);
+}
+
+/** Maps a key store id onto a sensible env var name (glm → GLM_API_KEY). */
+function keyIdToEnvKey(keyId: string | undefined): string | undefined {
+  if (!keyId) return undefined;
+  const registry = MODEL_REGISTRY[keyId as ModelId];
+  if (registry) return registry.envKey;
+  return `${keyId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_API_KEY`;
+}
+
+/** Role → profile routing table. */
+export function getRouting(): Record<string, string> {
+  return { ...(loadConfig().routing ?? {}) };
+}
+
+/** Set (or clear with "-") a role's profile. */
+export function setRouting(role: string, profile: string): void {
+  if (!role.trim()) throw new Error('Role name cannot be empty.');
+  const cfg = loadConfig();
+  cfg.routing = { ...(cfg.routing ?? {}) };
+  if (profile.trim() === '-') delete cfg.routing[role];
+  else cfg.routing[role] = profile.trim();
+  saveConfig(cfg);
+}
+
+/** Resolve a role name to its routed model, if configured. */
+export function resolveRole(role: string): ResolvedModel | undefined {
+  const profile = getRouting()[role];
+  if (!profile) return undefined;
+  return resolveModel(profile);
+}
+
+/**
+ * One-shot delegation to a routed role (used by the ask_model tool): sends
+ * the prompt — optionally with base64 images for vision roles — to the
+ * role's model and returns its text answer.
+ */
+export async function askRole(
+  role: string,
+  prompt: string,
+  images?: Array<{ data: string; mediaType: string }>,
+): Promise<string> {
+  const routing = getRouting();
+  const profile = routing[role];
+  if (!profile) {
+    const names = Object.keys(routing).join(', ');
+    throw new Error(`Unknown role "${role}". Configured roles: ${names || '(none — set one with /route)'}`);
+  }
+
+  const provider = createModel(profile);
+  const content = images?.length
+    ? ([
+        { type: 'text', text: prompt },
+        ...images.map((image) => ({
+          type: 'image_url' as const,
+          image_url: { url: `data:${image.mediaType};base64,${image.data}` },
+        })),
+      ] as unknown as string)
+    : prompt;
+
+  const response = (await Promise.race([
+    provider.model.invoke(content),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('角色模型超时（180s）')), 180_000),
+    ),
+  ])) as { content: unknown };
+
+  if (typeof response.content === 'string') return response.content;
+  if (Array.isArray(response.content)) {
+    return response.content
+      .map((block) =>
+        block && typeof block === 'object' && typeof (block as { text?: unknown }).text === 'string'
+          ? (block as { text: string }).text
+          : '',
+      )
+      .join('');
+  }
+  return '';
+}
+
+/** Model chosen in the REPL on a previous run, if any. */
+export function preferredModelId(): string | undefined {
+  const saved = loadConfig().model;
+  return saved?.trim() || undefined;
+}
+
+/** Persist the REPL's model choice (registry id or provider:model spec). */
+export function setPreferredModel(id: string): void {
   const cfg = loadConfig();
   cfg.model = id;
   saveConfig(cfg);

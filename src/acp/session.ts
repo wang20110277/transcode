@@ -145,7 +145,10 @@ export class AcpSession {
       });
 
       this.trimHistory();
-      return { stopReason: result.stopReason as AcpStopReason };
+      // 'stalled' has no ACP counterpart; report it as the closest reason.
+      const stopReason =
+        result.stopReason === 'stalled' ? 'max_turn_requests' : result.stopReason;
+      return { stopReason: stopReason as AcpStopReason };
     } catch (error) {
       if (signal.aborted) return { stopReason: 'cancelled' };
 

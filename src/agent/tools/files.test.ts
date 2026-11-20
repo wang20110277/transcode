@@ -53,6 +53,34 @@ describe('read_file', () => {
     expect(output).toContain('short');
     expect(output.length).toBeLessThan(2400);
   });
+
+  test('returns image files as base64 multimodal content', async () => {
+    const dir = workspace();
+    const session = createToolSession(dir);
+    // Minimal fake PNG: magic bytes + payload.
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+    writeFileSync(path.join(dir, 'logo.png'), png);
+
+    const result = await readFileTool.execute({ path: 'logo.png' }, ctx(session));
+    expect(typeof result).toBe('object');
+    const output = result as { output: string; images?: Array<{ data: string; mediaType: string }> };
+    expect(output.images?.length).toBe(1);
+    expect(output.images?.[0]?.mediaType).toBe('image/png');
+    expect(output.images?.[0]?.data).toBe(png.toString('base64'));
+    expect(output.output).toContain('image');
+    expect(hasFileBeenRead(session, path.join(dir, 'logo.png'))).toBe(true);
+  });
+
+  test('rejects oversized images instead of blowing up the context', async () => {
+    const dir = workspace();
+    const session = createToolSession(dir);
+    const huge = Buffer.alloc(3_500_000, 7);
+    writeFileSync(path.join(dir, 'big.jpg'), huge);
+
+    await expect(readFileTool.execute({ path: 'big.jpg' }, ctx(session))).rejects.toThrow(
+      /3 MB|3MB/,
+    );
+  });
 });
 
 describe('write_file', () => {
@@ -116,6 +144,74 @@ describe('edit_file', () => {
     await read(session, 'prose.md');
     await edit(session, 'prose.md', 'He said "don\'t stop" loudly', 'She said "go" now');
     expect(readFileSync(path.join(dir, 'prose.md'), 'utf8')).toBe('She said "go" now\n');
+  });
+
+  test('applies multiple edits in one call', async () => {
+    const dir = workspace();
+    writeFileSync(
+      path.join(dir, 'multi.txt'),
+      'alpha\nbeta\ngamma\nbeta\n',
+    );
+    const session = createToolSession(dir);
+
+    await read(session, 'multi.txt');
+    const result = await editFileTool.execute(
+      {
+        path: 'multi.txt',
+        edits: [
+          { old_string: 'alpha', new_string: 'ALPHA' },
+          { old_string: 'gamma', new_string: 'GAMMA' },
+          { old_string: 'beta\n', new_string: 'BETA\n', replace_all: true },
+        ],
+      },
+      ctx(session),
+    );
+
+    expect(readFileSync(path.join(dir, 'multi.txt'), 'utf8')).toBe('ALPHA\nBETA\nGAMMA\nBETA\n');
+    expect(result.output).toContain('Replaced 4 occurrence(s)');
+    expect(result.diff).toContain('-alpha');
+    expect(result.diff).toContain('+GAMMA');
+  });
+
+  test('multi-edit is atomic: a missing edit leaves the file untouched', async () => {
+    const dir = workspace();
+    writeFileSync(path.join(dir, 'a.txt'), 'one\ntwo\n');
+    const session = createToolSession(dir);
+
+    await read(session, 'a.txt');
+    await expect(
+      editFileTool.execute(
+        {
+          path: 'a.txt',
+          edits: [
+            { old_string: 'one', new_string: 'ONE' },
+            { old_string: 'nope', new_string: 'X' },
+          ],
+        },
+        ctx(session),
+      ),
+    ).rejects.toThrow(/not found/);
+    expect(readFileSync(path.join(dir, 'a.txt'), 'utf8')).toBe('one\ntwo\n');
+  });
+
+  test('multi-edit rejects an old_string contained in an earlier new_string', async () => {
+    const dir = workspace();
+    writeFileSync(path.join(dir, 'a.txt'), 'one\ntwo\n');
+    const session = createToolSession(dir);
+
+    await read(session, 'a.txt');
+    await expect(
+      editFileTool.execute(
+        {
+          path: 'a.txt',
+          edits: [
+            { old_string: 'one', new_string: 'one plus two' },
+            { old_string: 'two', new_string: 'TWO' },
+          ],
+        },
+        ctx(session),
+      ),
+    ).rejects.toThrow(/substring/);
   });
 
   test('returns a line-numbered snippet around the edit', async () => {

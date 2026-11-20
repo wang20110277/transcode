@@ -1,5 +1,11 @@
 import path from 'node:path';
 
+/** One step of the model-maintained task list (todo_write tool). */
+export interface TodoItem {
+  content: string;
+  status: 'pending' | 'in_progress' | 'completed';
+}
+
 /**
  * State that persists across tool calls within one conversation/session:
  * the shell's current working directory (so `cd` survives between bash
@@ -15,6 +21,8 @@ export interface ToolSession {
   shellSnapshot?: Promise<string | undefined>;
   /** Absolute paths of files the model has read (or written) this session. */
   readFileState: Set<string>;
+  /** Current task list, owned by the todo_write tool. */
+  todos: TodoItem[];
 }
 
 export function createToolSession(rootCwd: string): ToolSession {
@@ -23,6 +31,7 @@ export function createToolSession(rootCwd: string): ToolSession {
     cwd: absolute,
     rootCwd: absolute,
     readFileState: new Set<string>(),
+    todos: [],
   };
 }
 

@@ -1,14 +1,14 @@
 import { render, Box, Text } from 'ink';
 import { useState } from 'react';
-import { envModelLabel, getAvailableModels, preferredModelId, type ModelId } from './provider/provider.js';
+import { envModelLabel, getAvailableModels, preferredModelId } from './provider/provider.js';
 import { type CommandContext } from './commands.js';
 import REPL from './screens/REPL.js';
 import { bannerLines } from './screens/banner.js';
 import { createKeyedStdin } from './tui/keyed-stdin.js';
 import { VERSION } from './version.js';
-const DEFAULT_MODEL: ModelId = preferredModelId() ?? 'opus';
+const DEFAULT_MODEL: string = preferredModelId() ?? 'opus';
 
-function Banner({ modelId, cwd, envLabel }: { modelId: ModelId; cwd: string; envLabel?: string }) {
+function Banner({ modelId, cwd, envLabel }: { modelId: string; cwd: string; envLabel?: string }) {
   const models = getAvailableModels();
   const current = models.find(m => m.id === modelId);
 
@@ -37,7 +37,7 @@ function Banner({ modelId, cwd, envLabel }: { modelId: ModelId; cwd: string; env
 }
 
 function App() {
-  const [modelId, setModelId] = useState<ModelId>(DEFAULT_MODEL);
+  const [modelId, setModelId] = useState<string>(DEFAULT_MODEL);
   const cwd = process.cwd();
 
   const ctx: CommandContext = {

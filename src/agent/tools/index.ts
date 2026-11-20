@@ -4,15 +4,35 @@ import type { AgentTool, InvokeResult, ToolContext } from './types.js';
 import { bashTool } from './bash.js';
 import { editFileTool, readFileTool, writeFileTool } from './files.js';
 import { globTool, grepTool } from './search.js';
+import { todoWriteTool } from './todo.js';
+import { createAskModelTool } from './ask-model.js';
+import { createDispatchAgentTool } from './dispatch.js';
+import { readImageBlocks } from './files.js';
+import { askRole as providerAskRole } from '../../provider/provider.js';
 
-export const AGENT_TOOLS: AgentTool[] = [
+const askModelTool = createAskModelTool(async (role, prompt, images, ctx) => {
+  const blocks = images?.length && ctx ? await readImageBlocks(images, ctx) : undefined;
+  return providerAskRole(role, prompt, blocks);
+});
+
+// The dispatch pool deliberately excludes dispatch_agent itself (no recursion).
+const dispatchPool = [
   readFileTool,
   writeFileTool,
   editFileTool,
   globTool,
   grepTool,
   bashTool,
+  todoWriteTool,
+  askModelTool,
 ];
+const dispatchAgentTool = createDispatchAgentTool({
+  runLoop: (options) =>
+    import('../loop.js').then(({ runAgentLoop }) => runAgentLoop(options)),
+  tools: dispatchPool,
+});
+
+export const AGENT_TOOLS: AgentTool[] = [...dispatchPool, dispatchAgentTool];
 
 export function findAgentTool(name: string): AgentTool | undefined {
   return AGENT_TOOLS.find((item) => item.name === name);
@@ -49,7 +69,12 @@ export async function invokeTool(
     if (typeof result === 'string') {
       return { ok: true, output: result || '(no output)' };
     }
-    return { ok: true, output: result.output || '(no output)', diff: result.diff };
+    return {
+      ok: true,
+      output: result.output || '(no output)',
+      diff: result.diff,
+      images: result.images,
+    };
   } catch (error) {
     return { ok: false, output: `Error: ${(error as Error).message}` };
   }

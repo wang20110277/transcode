@@ -2,10 +2,10 @@
 
 多模型 AI 编码 Agent CLI。当前 MVP 的目标是：**作为本地 Agent 被 transonce、multica 等客户端通过 ACP 调用**。
 
-- 终端侧：Ink REPL（保留原有命令：`help` / `models` / `clear` / `exit`）
+- 终端侧：Ink REPL（命令：`help` / `models` / `mode` / `route` / `init` / `clear` / `exit`）
 - Agent 侧：`transcode acp` 启动 ACP v1 stdio 服务，供 transonce、multica 等客户端调用
-- 模型侧：Anthropic / OpenAI 及任意 OpenAI 兼容网关（DeepSeek、GLM、MiniMax、Kimi、自建网关等）
-- 工具侧：`read_file` / `write_file` / `edit_file` / `glob` / `grep` / `bash`
+- 模型侧：档案（Profile）+ 角色（Role）路由——一个模型 ID 对应一个地址，不同任务可派发不同模型（含子 Agent）
+- 工具侧：`read_file` / `write_file` / `edit_file` / `glob` / `grep` / `bash` / `todo_write` / `ask_model` / `dispatch_agent`
 
 ## 环境要求
 
@@ -26,10 +26,12 @@ bun link
 
 ## 配置模型
 
-通过环境变量配置，模型可以是注册表 id，也可以是 `provider:model`：
+三种方式，从简到繁：
+
+**1. 环境变量**（注册表 id 或 `provider:model`）：
 
 ```bash
-# 注册表 id: opus | gpt | deepseek | glm | minimax | kimi
+# 注册表 id: opus | gpt | deepseek | glm | glmc | minimax | kimi | custom
 export ANTHROPIC_API_KEY=...
 export DEEPSEEK_API_KEY=...
 export TRANSCODE_MODEL=deepseek
@@ -38,6 +40,27 @@ export TRANSCODE_MODEL=deepseek
 export OPENAI_API_KEY=...
 export TRANSCODE_MODEL=openai:gpt-4o
 ```
+
+**2. REPL 交互配置**（`/models`）：三级流程——选厂商 → 选模型（常用列表 + 自定义模型名）→ 输入 key（已存的可回车沿用）。key 确认后**自动测试连通性**，失败显示 API 原始报错并可重输。`custom` 支持任意 OpenAI 兼容网关（输入 base URL + 模型名）。
+
+**3. 档案 + 角色路由**（`~/.transcode.json`，任务级模型分派）：
+
+```jsonc
+{
+  "apiKeys": { "glm": "…", "deepseek": "…" },
+  "profiles": {
+    "glm-coding": { "baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4", "model": "glm-4.6", "keyId": "glm" },
+    "glm-vision": { "baseUrl": "https://open.bigmodel.cn/api/paas/v4", "model": "glm-4.6v", "keyId": "glm" }
+  },
+  "routing": { "default": "glm-coding", "analysis": "glm-coding", "vision": "glm-vision" }
+}
+```
+
+- **Profile**：命名档案 = 地址 + 模型名 + keyId（智谱普通端点 / CodePlan 端点各一个档案，共用一把 key；同名覆盖内置注册表）
+- **Role**：任意命名的角色 → 档案，`/route analysis glmc` 设置、`/route` 查看、`/route design -` 删除
+- ACP `session/set_model` 直接收档案名，宿主可按任务指派不同模型
+
+> **GLM Coding Plan 用户**：套餐只在 Coding 专用端点生效，请用 `glmc` 档案（`https://open.bigmodel.cn/api/coding/paas/v4`）；普通 `glm` 端点会报"429 余额不足"。
 
 ### 复用 Claude Code 的 Anthropic 兼容配置
 
@@ -70,15 +93,18 @@ bun run test:acp:real        # 完整 ACP + 工具调用（会创建临时 works
 
 | 变量 | 说明 |
 | --- | --- |
-| `TRANSCODE_MODEL` | 默认模型。注册表 id、`provider:model`，或裸模型名 |
+| `TRANSCODE_MODEL` | 默认模型。注册表 id、档案名、`provider:model`，或裸模型名 |
 | `TRANSCODE_DEFAULT_PROVIDER` | 裸模型名走哪个 provider，默认 `openai` |
-| `TRANSCODE_PERMISSION_MODE` | `ask`（默认） / `auto` / `readonly` |
+| `TRANSCODE_PERMISSION_MODE` | `ask`（默认） / `auto` / `readonly`；REPL 里可用 `/mode` 运行时切换 |
 | `TRANSCODE_ALLOW_OUTSIDE_CWD` | 设为 `1` 才允许读写工作区之外的路径 |
 | `TRANSCODE_BASE_URL` | 覆盖当前模型的 base URL（所有 provider） |
 | `TRANSCODE_MAX_TOKENS` | 单次回复的 `max_tokens`，默认 `8192` |
+| `TRANSCODE_MAX_TURNS` | Agent 工具回合上限，默认 `200`；触顶会明确提示并写入对话 |
+| `TRANSCODE_SUBAGENT_MAX_TURNS` | 子 Agent 回合上限，默认 `25` |
+| `TRANSCODE_SKIP_MODEL_CHECK` | 设为 `1` 跳过 /models 的连通性测试 |
 | `TRANSCODE_MOCK` | 设为 `1` 使用本地 mock 模型（仅用于协议测试） |
 
-`provider:model` 支持的前缀：`openai`、`anthropic`、`deepseek`、`glm`、`minimax`、`kimi`、`moonshot`。
+`provider:model` 支持的前缀：`openai`、`anthropic`、`deepseek`、`glm`、`glmc`、`minimax`、`kimi`、`moonshot`。
 裸模型名会使用 `TRANSCODE_DEFAULT_PROVIDER`；`openai` 前缀和裸模型名可以用 `OPENAI_BASE_URL` 指向兼容网关，`TRANSCODE_BASE_URL` 则可以覆盖任意 provider。
 
 ## 本地运行
@@ -167,18 +193,33 @@ ACP 默认权限模式是 `ask`：写文件、改文件、执行命令前会向�
 
 | 工具 | 说明 | 是否需要授权 |
 | --- | --- | --- |
-| `read_file` | 读取文本文件，带行号，支持 offset/limit | 否 |
-| `glob` | 按 glob 查文件 | 否 |
-| `grep` | 正则搜索文件内容 | 否 |
-| `write_file` | 创建/覆盖文件 | 是 |
-| `edit_file` | 精确字符串替换 | 是 |
-| `bash` | 在 workspace 内执行 bash 命令 | 是 |
+| `read_file` | 文本文件（带行号、offset/limit、超长行截断）；PNG/JPG/GIF/WebP 以多模态图片返回 | 否 |
+| `write_file` | 创建/覆盖文件（已存在的文件需先 read 过；返回新文件/变更 diff） | 是 |
+| `edit_file` | 精确替换，支持单次多处编辑（`edits[]` 原子应用）；弯/直引号自动归一化 | 是 |
+| `glob` | 按 glob 查文件（git 仓库内遵循 `.gitignore`） | 否 |
+| `grep` | 正则搜索：上下文行（`context`）、跨行匹配（`multiline`）、`.gitignore` 感知 | 否 |
+| `bash` | 用户 shell 执行；**cd 跨调用持久**、登录环境快照、进程组 kill、头尾截断 | 是（只读命令免确认） |
+| `todo_write` | 任务清单（`[x]/[~]/[ ]`），多步任务防漂移 | 否 |
+| `ask_model` | 单次问答式分派：把子问题发给某角色的模型，答案回入对话 | 否 |
+| `dispatch_agent` | 派发子 Agent：独立模型 + 工具白名单 + 自己的回合循环，只回传最终报告 | 是 |
+
+**bash 免确认规则**：`ls`/`cat`/`grep`/`git status` 等只读命令（含管道、`2>/dev/null` 等无害重定向）自动放行并在结果行标注 `(read-only)`；写入重定向、命令替换、危险参数（`find -delete`、`sed -i`…）照常逐次确认。连续重复调用（含 A-B-A-B 振荡）会被熔断并引导换路子。
 
 所有路径默认限制在任务 workspace（`cwd`）内；`..` 越界会被拒绝，除非显式设置 `TRANSCODE_ALLOW_OUTSIDE_CWD=1`。
 
+## 子任务分派
+
+主 Agent 可以把工作派给不同角色的模型（角色经 `/route` 配置，见上文档案与路由）：
+
+- **`ask_model`**：单次专家问答（分析、设计取舍、审查、看图），无工具、一次调用
+- **`dispatch_agent`**：多步研究型子任务 —— 子 Agent 用角色档案的模型 + 工具白名单（默认只读三件套）跑自己的循环。上下文契约是**任务进、报告出**：子 Agent 看不到主对话，任务描述必须自包含；只有最终报告回入主对话。派发本身需用户 y/n 授权，子 Agent 禁止递归派发，回合上限 25
+- **图片自动代理**：配置了 `routing.vision` 时，工具产生的图片自动经视觉模型转文字描述，主模型无需多模态能力
+
+主对话有防护栏：探索停滞（30 次零写入）自动催促、无视则强制终止（`stalled`）；交付后长尾钻探会被收尾提醒。
+
 ## 上下文
 
-每次 turn 会加载 workspace 下的 `AGENTS.md`、`CLAUDE.md`、`TRANSCODE.md`、`.transcode/AGENTS.md`（存在时）并注入系统提示，因此 multica 写入的任务说明、仓库约定都能被 Agent 看到。
+每次 turn 按优先级加载 workspace 下的 `TRANS.md`、`AGENTS.md`、`CLAUDE.md`、`TRANSCODE.md`、`.transcode/AGENTS.md`（存在时）注入系统提示。REPL 里 `/init` 可让 Agent 自行探索仓库并生成 `TRANS.md`（项目背景 / 命令 / 架构 / 约定）。
 
 ## ACP 协议
 
@@ -188,8 +229,8 @@ ACP 默认权限模式是 `ask`：写文件、改文件、执行命令前会向�
 
 - 不支持 MCP（会忽略 `mcpServers` 并在 stderr 提示）
 - 不支持 ACP session 持久化：`loadSession: false`，进程内 session 在进程退出后丢失
-- 只处理文本 prompt；图片/音频/嵌入式资源暂不支持
-- 没有 Web 搜索、子 Agent、hooks、自动压缩
+- prompt 仍以文本为主；图片只支持 `read_file` 读取（≤3MB，多模态模型直读，其余经 vision 角色转述）
+- 没有 Web 搜索、hooks、自动压缩；子 Agent 为隔离式（fork 继承上下文模式规划中）
 - 工具输出有长度上限，避免单次上下文爆炸
 - `TRANSCODE_MOCK=1` 仅用于协议 smoke test，不会调用真实模型
 

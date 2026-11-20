@@ -119,6 +119,90 @@ describe('runAgentLoop', () => {
       .toBe(true);
   });
 
+  test('tool images flow into the ToolMessage as multimodal blocks', async () => {
+    const imageTool: AgentTool = {
+      ...fakeTool,
+      async execute() {
+        return {
+          output: 'here is the screenshot',
+          images: [{ data: 'aW1hZ2U=', mediaType: 'image/png' }],
+        };
+      },
+    };
+
+    const result = await runAgentLoop({
+      model: stubModel(),
+      cwd: '/tmp',
+      messages: [],
+      systemPrompt: 'test',
+      tools: [imageTool],
+      onEvent: () => {},
+    });
+
+    const toolMessage = result.messages.find((message) => message.getType() === 'tool');
+    const content = toolMessage?.content as unknown;
+    expect(Array.isArray(content)).toBe(true);
+    const blocks = content as Array<{ type: string; image_url?: { url: string } }>;
+    expect(blocks.some((block) => block.type === 'text')).toBe(true);
+    const image = blocks.find((block) => block.type === 'image_url');
+    expect(image?.image_url?.url).toBe('data:image/png;base64,aW1hZ2U=');
+  });
+
+  test('images are auto-described through the vision proxy when provided', async () => {
+    const imageTool: AgentTool = {
+      ...fakeTool,
+      async execute() {
+        return {
+          output: 'screenshot captured',
+          images: [{ data: 'aW1n', mediaType: 'image/png' }],
+        };
+      },
+    };
+
+    const result = await runAgentLoop({
+      model: stubModel(),
+      cwd: '/tmp',
+      messages: [],
+      systemPrompt: 'test',
+      tools: [imageTool],
+      onEvent: () => {},
+      describeImages: async () => '截图显示 429 余额不足报错',
+    });
+
+    const toolMessage = result.messages.find((message) => message.getType() === 'tool');
+    expect(Array.isArray(toolMessage?.content)).toBe(false);
+    expect(String(toolMessage?.content)).toContain('截图显示 429 余额不足报错');
+  });
+
+  test('vision proxy failure falls back to raw image blocks', async () => {
+    const imageTool: AgentTool = {
+      ...fakeTool,
+      async execute() {
+        return {
+          output: 'screenshot captured',
+          images: [{ data: 'aW1n', mediaType: 'image/png' }],
+        };
+      },
+    };
+
+    const result = await runAgentLoop({
+      model: stubModel(),
+      cwd: '/tmp',
+      messages: [],
+      systemPrompt: 'test',
+      tools: [imageTool],
+      onEvent: () => {},
+      describeImages: async () => {
+        throw new Error('vision model offline');
+      },
+    });
+
+    const toolMessage = result.messages.find((message) => message.getType() === 'tool');
+    const content = toolMessage?.content as Array<{ type: string }>;
+    expect(Array.isArray(content)).toBe(true);
+    expect(content[1]?.type).toBe('image_url');
+  });
+
   test('mutating tools without isReadOnly still request permission', async () => {
     let permissionAsked = 0;
     await runAgentLoop({
@@ -352,5 +436,166 @@ describe('runAgentLoop', () => {
         message.getType() === 'ai' && message.content.toString().includes('Stop exploring'),
     );
     expect(nudge).toBeUndefined();
+  });
+
+  test('nudges the model to wrap up when exploring long after a real file write', async () => {
+    const reader: AgentTool = {
+      ...fakeTool,
+      name: 'reader',
+      isMutating: false,
+      async execute() {
+        return 'ok';
+      },
+    };
+    const writeFile: AgentTool = { ...fakeTool, name: 'write_file' };
+
+    const steps: Array<{ tool: string; args: string }> = [
+      { tool: 'write_file', args: '{"n":-1}' },
+      ...Array.from({ length: 44 }, (_, i) => ({
+        tool: 'reader',
+        args: JSON.stringify({ n: i }),
+      })),
+    ];
+
+    const result = await runAgentLoop({
+      model: scriptedModel(steps),
+      cwd: '/tmp',
+      messages: [],
+      systemPrompt: 'test',
+      tools: [reader, writeFile],
+      onEvent: () => {},
+    });
+
+    const nudges = result.messages.filter(
+      (message) =>
+        message.getType() === 'ai' && message.content.toString().includes('reply with a summary'),
+    );
+    expect(nudges.length).toBe(1);
+  });
+
+  test('mutating bash does not count as a delivered file — no wrap-up nudge', async () => {
+    const result = await runAgentLoop({
+      model: scriptedModel(
+        Array.from({ length: 45 }, (_, i) => ({
+          tool: 'fake' as const,
+          args: JSON.stringify({ n: i }),
+        })),
+      ),
+      cwd: '/tmp',
+      messages: [],
+      systemPrompt: 'test',
+      tools: [fakeTool], // mutating, but not a file write
+      onEvent: () => {},
+    });
+
+    const wrapUp = result.messages.find(
+      (message) =>
+        message.getType() === 'ai' && message.content.toString().includes('reply with a summary'),
+    );
+    expect(wrapUp).toBeUndefined();
+  });
+
+  test('force-stops when the model keeps exploring after an ignored stall nudge', async () => {
+    const reader: AgentTool = {
+      ...fakeTool,
+      isMutating: false,
+      async execute() {
+        return 'ok';
+      },
+    };
+
+    const result = await runAgentLoop({
+      model: scriptedModel(
+        Array.from({ length: 60 }, (_, i) => ({
+          tool: 'fake' as const,
+          args: JSON.stringify({ n: i }),
+        })),
+      ),
+      cwd: '/tmp',
+      messages: [],
+      systemPrompt: 'test',
+      tools: [reader],
+      onEvent: () => {},
+    });
+
+    // Stall nudge at 30 calls, grace of 15 more, then a hard stop.
+    expect(result.stopReason).toBe('stalled');
+    const notice = result.messages.find(
+      (message) =>
+        message.getType() === 'ai' && message.content.toString().includes('ignored the earlier reminder'),
+    );
+    expect(notice).toBeDefined();
+  });
+
+  test('starting the deliverable during the grace window cancels the hard stop', async () => {
+    const reader: AgentTool = {
+      ...fakeTool,
+      isMutating: false,
+      async execute() {
+        return 'ok';
+      },
+    };
+    const writeFile: AgentTool = { ...fakeTool, name: 'write_file' };
+
+    // 32 reads (past the nudge), then write, then a few more reads.
+    const steps: Array<{ tool: string; args: string }> = [
+      ...Array.from({ length: 32 }, (_, i) => ({
+        tool: 'fake',
+        args: JSON.stringify({ n: i }),
+      })),
+      { tool: 'write_file', args: '{"content":"x"}' },
+      ...Array.from({ length: 10 }, (_, i) => ({
+        tool: 'fake',
+        args: JSON.stringify({ m: i }),
+      })),
+    ];
+
+    const result = await runAgentLoop({
+      model: scriptedModel(steps),
+      cwd: '/tmp',
+      messages: [],
+      systemPrompt: 'test',
+      tools: [reader, writeFile],
+      onEvent: () => {},
+    });
+
+    expect(result.stopReason).not.toBe('stalled');
+  });
+
+  test('a single mutating bash followed by reads does not trigger the wrap-up nudge', async () => {
+    const reader: AgentTool = {
+      ...fakeTool,
+      name: 'reader',
+      isMutating: false,
+      async execute() {
+        return 'ok';
+      },
+    };
+    const bashLike: AgentTool = { ...fakeTool, name: 'bash' }; // mutating, not a file write
+
+    const steps: Array<{ tool: string; args: string }> = [
+      { tool: 'bash', args: '{"n":-1}' },
+      ...Array.from({ length: 44 }, (_, i) => ({
+        tool: 'reader',
+        args: JSON.stringify({ n: i }),
+      })),
+    ];
+
+    const result = await runAgentLoop({
+      model: scriptedModel(steps),
+      cwd: '/tmp',
+      messages: [],
+      systemPrompt: 'test',
+      tools: [reader, bashLike],
+      onEvent: () => {},
+    });
+
+    const wrapUp = result.messages.find(
+      (message) =>
+        message.getType() === 'ai' && message.content.toString().includes('reply with a summary'),
+    );
+    // Regression: a misjudged "mutating" bash used to falsely announce
+    // "the deliverable has already been written" and abort honest work.
+    expect(wrapUp).toBeUndefined();
   });
 });
