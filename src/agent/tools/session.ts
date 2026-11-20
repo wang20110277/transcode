@@ -6,6 +6,15 @@ export interface TodoItem {
   status: 'pending' | 'in_progress' | 'completed';
 }
 
+/** A background shell task started via bash run_in_background. */
+export interface BackgroundTask {
+  id: string;
+  pid: number;
+  logPath: string;
+  command: string;
+  startedAt: number;
+}
+
 /**
  * State that persists across tool calls within one conversation/session:
  * the shell's current working directory (so `cd` survives between bash
@@ -23,6 +32,8 @@ export interface ToolSession {
   readFileState: Set<string>;
   /** Current task list, owned by the todo_write tool. */
   todos: TodoItem[];
+  /** Background shell tasks (bash run_in_background), keyed by id. */
+  bgTasks: Map<string, BackgroundTask>;
 }
 
 export function createToolSession(rootCwd: string): ToolSession {
@@ -32,6 +43,7 @@ export function createToolSession(rootCwd: string): ToolSession {
     rootCwd: absolute,
     readFileState: new Set<string>(),
     todos: [],
+    bgTasks: new Map(),
   };
 }
 

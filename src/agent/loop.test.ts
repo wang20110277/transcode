@@ -50,7 +50,11 @@ function scriptedModel(steps: ScriptStep[]): BaseChatModel {
       })();
     },
   };
-  return { bindTools: () => runnable } as unknown as BaseChatModel;
+  const model = {
+    bindTools: () => runnable,
+    invoke: async () => ({ content: '摘要：任务是更新 README，已完成探索，接下来写入。' }),
+  };
+  return model as unknown as BaseChatModel;
 }
 
 const fakeTool: AgentTool = {
@@ -201,6 +205,93 @@ describe('runAgentLoop', () => {
     const content = toolMessage?.content as Array<{ type: string }>;
     expect(Array.isArray(content)).toBe(true);
     expect(content[1]?.type).toBe('image_url');
+  });
+
+  test('auto-compacts the conversation when the char budget is exceeded', async () => {
+    process.env.TRANSCODE_COMPACT_CHARS = '1200';
+    const events: AgentEvent[] = [];
+    const chatty: AgentTool = {
+      ...fakeTool,
+      isMutating: false,
+      async execute() {
+        return `large chunk ${'x'.repeat(400)} done`;
+      },
+    };
+
+    const result = await runAgentLoop({
+      model: scriptedModel(
+        Array.from({ length: 10 }, (_, i) => ({ tool: 'fake' as const, args: JSON.stringify({ n: i }) })),
+      ),
+      cwd: '/tmp',
+      messages: [],
+      systemPrompt: 'test',
+      tools: [chatty],
+      onEvent: (event) => events.push(event),
+    });
+
+    try {
+      const text = events
+        .filter((event) => event.type === 'text')
+        .map((event) => (event as { text: string }).text)
+        .join('');
+      expect(text).toContain('自动压缩');
+      expect(
+        result.messages.some((message) =>
+          message.content.toString().includes('[conversation summary]'),
+        ),
+      ).toBe(true);
+      // The compacted history must not start with an orphaned tool message.
+      expect(result.messages[1]?.getType()).not.toBe('tool');
+    } finally {
+      delete process.env.TRANSCODE_COMPACT_CHARS;
+    }
+  });
+
+  test('plan mode denies mutations and allows read-only exploration', async () => {
+    let writes = 0;
+    let reads = 0;
+    const tools: AgentTool[] = [
+      {
+        ...fakeTool,
+        name: 'write_file',
+        isMutating: true,
+        async execute() {
+          writes++;
+          return 'written';
+        },
+      },
+      {
+        ...fakeTool,
+        name: 'read_file',
+        isMutating: false,
+        async execute() {
+          reads++;
+          return 'content';
+        },
+      },
+    ];
+
+    const events: AgentEvent[] = [];
+    const result = await runAgentLoop({
+      model: scriptedModel([
+        { tool: 'read_file', args: '{"path":"a"}' },
+        { tool: 'write_file', args: '{"path":"a"}' },
+      ]),
+      cwd: '/tmp',
+      messages: [],
+      systemPrompt: 'test',
+      tools,
+      planMode: true,
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(result.stopReason).toBe('end_turn');
+    expect(reads).toBe(1);
+    expect(writes).toBe(0);
+    const denied = events.find(
+      (event) => event.type === 'tool_result' && event.output.includes('Plan mode'),
+    );
+    expect(denied).toBeDefined();
   });
 
   test('mutating tools without isReadOnly still request permission', async () => {

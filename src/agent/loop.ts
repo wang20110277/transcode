@@ -72,6 +72,8 @@ export interface AgentLoopOptions {
   requestPermission?: RequestPermission;
   /** Session state shared across tool calls (shell cwd, read files). Created when absent. */
   toolSession?: ToolSession;
+  /** Plan mode: read-only exploration; mutating tools are denied with guidance. */
+  planMode?: boolean;
   /** Vision proxy override (tests). Default: routing.vision → askRole('vision'). */
   describeImages?: (images: Array<{ data: string; mediaType: string }>) => Promise<string>;
 }
@@ -245,6 +247,56 @@ async function runMockTurn(
   return 'end_turn';
 }
 
+const COMPACT_DEFAULT_CHARS = 200_000;
+
+function estimateMessagesChars(messages: BaseMessage[]): number {
+  return messages.reduce(
+    (sum, message) => sum + JSON.stringify(message.content ?? '').length + 200,
+    0,
+  );
+}
+
+/**
+ * Auto-compaction (Claude Code's autoCompact, ported): when the estimated
+ * conversation size exceeds the char budget, summarize the history with the
+ * same model and keep the summary plus a short recent tail. Tool messages
+ * at the tail head are dropped so providers never see orphaned tool calls.
+ */
+async function compactMessages(
+  model: BaseChatModel,
+  messages: BaseMessage[],
+  systemPrompt: string,
+): Promise<BaseMessage[]> {
+  const nonSystem = messages.filter((message) => message.getType() !== 'system');
+  const transcript = nonSystem
+    .map((message) => `${message.getType()}: ${textFromContent(message.content)}`)
+    .join('\n')
+    .slice(0, 150_000);
+  const response = await model.invoke(
+    'Summarize this agent conversation so work can continue after compaction. ' +
+      'Include: the user task, key decisions, files read/modified, current state, next steps. ' +
+      'Be concise and factual.\n\n' +
+      transcript,
+  );
+  const summary = textFromContent((response as { content: unknown }).content);
+
+  const system = messages.find((message) => message.getType() === 'system') ??
+    new SystemMessage(systemPrompt);
+  const tail = nonSystem.slice(-4);
+  while (tail.length > 0 && tail[0]!.getType() === 'tool') tail.shift();
+
+  return [
+    system,
+    new (await import('@langchain/core/messages')).HumanMessage(
+      `[conversation summary]\n${summary}`,
+    ),
+    new (await import('@langchain/core/messages')).AIMessage(
+      'Continuing with the summarized context.',
+    ),
+    ...tail,
+  ];
+}
+
 export async function runAgentLoop(
   options: AgentLoopOptions,
 ): Promise<AgentLoopResult> {
@@ -297,6 +349,19 @@ export async function runAgentLoop(
 
   for (let turn = 0; turn < maxTurns; turn++) {
     if (options.signal?.aborted) return { stopReason: 'cancelled', messages };
+
+    // Auto-compaction before the request when over budget.
+    const compactChars = Number(process.env.TRANSCODE_COMPACT_CHARS ?? COMPACT_DEFAULT_CHARS);
+    if (compactChars > 0 && estimateMessagesChars(messages) > compactChars) {
+      await options.onEvent({ type: 'text', text: '\n⚠ 上下文接近上限，自动压缩历史…\n' });
+      try {
+        const compacted = await compactMessages(options.model, messages, options.systemPrompt);
+        messages.length = 0;
+        messages.push(...compacted);
+      } catch {
+        // Compaction failed (e.g. provider error) — continue un-compacted.
+      }
+    }
 
     const partials = new Map<number, PartialToolCall>();
     let text = '';
@@ -360,6 +425,14 @@ export async function runAgentLoop(
         result = { ok: false, output: `Unknown tool: ${call.name}` };
       } else if (occurrences >= 3) {
         result = { ok: false, output: `Error: ${REPEAT_GUIDANCE}` };
+      } else if (options.planMode === true && tool.isMutating && tool.isReadOnly?.(input) !== true) {
+        result = {
+          ok: false,
+          output:
+            'Plan mode is read-only: mutations are disabled. Finish exploring and output the ' +
+            'numbered implementation plan (end with the line PLAN READY). The user will approve ' +
+            'it before any changes are made.',
+        };
       } else {
         const readOnly = tool.isReadOnly?.(input) === true;
         const needsPermission = tool.isMutating && !readOnly;
@@ -381,6 +454,7 @@ export async function runAgentLoop(
               signal: options.signal,
               session: toolSession,
               requestPermission: options.requestPermission,
+              emit: options.onEvent as (event: { type: 'tool_call' }) => void,
             })
           : { ok: false, output: 'Permission denied by the client.' };
 

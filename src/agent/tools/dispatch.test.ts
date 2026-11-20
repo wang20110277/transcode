@@ -101,6 +101,48 @@ describe('dispatch_agent', () => {
     expect(runs[0]!.maxTurns).toBe(7);
   });
 
+  test('forwards sub-agent tool activity to the parent as prefixed events', async () => {
+    const emitted: Array<{ name: string; title: string }> = [];
+    const tool = createDispatchAgentTool({
+      runLoop: async (options) => {
+        void options.onEvent?.({
+          type: 'tool_call',
+          toolCallId: 'sub-1',
+          name: 'grep',
+          title: 'search: auth',
+          kind: 'search',
+          input: {},
+        });
+        void options.onEvent?.({
+          type: 'text',
+          text: 'should not be forwarded',
+        });
+        return {
+          stopReason: 'end_turn',
+          messages: [new HumanMessage('t'), new AIMessage('报告')],
+        };
+      },
+      tools: pool,
+      model: noopModel,
+    });
+
+    const report = await tool.execute(
+      { role: 'research', task: 'x' },
+      {
+        cwd: '/tmp',
+        session: createToolSession('/tmp'),
+        emit: (event) => {
+          if (event.type === 'tool_call') {
+            emitted.push({ name: event.name, title: event.title });
+          }
+        },
+      },
+    );
+
+    expect(report).toBe('报告');
+    expect(emitted).toEqual([{ name: 'grep', title: '[research] search: auth' }]);
+  });
+
   test('an empty sub-agent report is an error', async () => {
     const tool = createDispatchAgentTool({
       runLoop: async () => ({ stopReason: 'end_turn', messages: [new HumanMessage('t')] }),

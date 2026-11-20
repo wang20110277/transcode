@@ -9,6 +9,7 @@ import { createAskModelTool } from './ask-model.js';
 import { createDispatchAgentTool } from './dispatch.js';
 import { readImageBlocks } from './files.js';
 import { askRole as providerAskRole } from '../../provider/provider.js';
+import { bashOutputTool } from './bash.js';
 
 const askModelTool = createAskModelTool(async (role, prompt, images, ctx) => {
   const blocks = images?.length && ctx ? await readImageBlocks(images, ctx) : undefined;
@@ -23,6 +24,7 @@ const dispatchPool = [
   globTool,
   grepTool,
   bashTool,
+  bashOutputTool,
   todoWriteTool,
   askModelTool,
 ];

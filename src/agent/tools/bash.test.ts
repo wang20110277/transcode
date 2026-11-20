@@ -2,9 +2,50 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { bashTool } from './bash.js';
+import { bashTool, bashOutputTool } from './bash.js';
 import { createToolSession, type ToolSession } from './session.js';
 import type { ToolContext } from './types.js';
+
+describe('background bash', () => {
+  test('run_in_background returns immediately; bash_output waits and reads the log', async () => {
+    const session = createToolSession(workspace());
+    const start = await bashTool.execute(
+      { command: 'printf bg-done-XYZ', run_in_background: true },
+      ctx(session),
+    );
+
+    expect(start).toMatch(/bg-\d+ started/);
+    const id = /bg-\d+/.exec(start)![0]!;
+
+    const output = await bashOutputTool.execute(
+      { task_id: id, wait: true },
+      ctx(session),
+    );
+    expect(output).toContain('bg-done-XYZ');
+    expect(output).toMatch(/exited/);
+  });
+
+  test('bash_output without a task_id lists the background tasks', async () => {
+    const session = createToolSession(workspace());
+    const start = await bashTool.execute(
+      { command: 'sleep 2', run_in_background: true },
+      ctx(session),
+    );
+    const id = /bg-\d+/.exec(start)![0]!;
+
+    const listing = await bashOutputTool.execute({}, ctx(session));
+    expect(listing).toContain(id);
+    expect(listing).toContain('sleep 2');
+    expect(listing).toMatch(/running/);
+  });
+
+  test('bash_output rejects unknown ids', async () => {
+    const session = createToolSession(workspace());
+    await expect(
+      bashOutputTool.execute({ task_id: 'bg-999' }, ctx(session)),
+    ).rejects.toThrow(/bg-999/);
+  });
+});
 
 describe('bash tool wiring', () => {
   test('description uses claudecode-style hard wording against file dumps', () => {

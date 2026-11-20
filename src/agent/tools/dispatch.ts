@@ -111,7 +111,17 @@ export function createDispatchAgentTool(deps: DispatchDeps = {}): AgentTool {
         tools: selected,
         maxTurns,
         toolSession: createToolSession(ctx.session.cwd),
-        onEvent: () => {},
+        onEvent: (event) => {
+          // Forward sub-agent tool calls (prefixed) so the parent UI shows
+          // live progress; sub-agent text and results stay private.
+          if (ctx.emit && event.type === 'tool_call') {
+            ctx.emit({
+              ...event,
+              toolCallId: `sub-${event.toolCallId}`,
+              title: `[${role}] ${event.title}`,
+            });
+          }
+        },
         requestPermission: ctx.requestPermission,
       });
 

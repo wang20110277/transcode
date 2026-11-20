@@ -26,6 +26,8 @@ export interface ToolContext {
     kind: ToolKind;
     input: Record<string, unknown>;
   }) => Promise<boolean>;
+  /** Event sink for nested agent progress (dispatch_agent forwards here). */
+  emit?: (event: { type: 'tool_call'; [key: string]: unknown }) => void;
 }
 
 /** Rich execute result: model-facing output plus optional extras. */

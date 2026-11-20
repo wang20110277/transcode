@@ -296,6 +296,62 @@ function killProcessGroup(pid: number | undefined, signal: NodeJS.Signals): void
   }
 }
 
+function processAlive(pid: number): boolean {
+  if (pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export const bashOutputTool: AgentTool = {
+  name: 'bash_output',
+  description:
+    'Read output of background bash tasks (started with bash run_in_background). ' +
+    'Without task_id, lists all background tasks with running/exited status. ' +
+    'With wait=true, blocks up to 5s for the task to finish first.',
+  kind: 'read',
+  isMutating: false,
+  schema: z.object({
+    task_id: z.string().nullable().optional().describe('Background task id (bg-N)'),
+    wait: z.boolean().nullable().optional().describe('Wait up to 5s for the task to exit'),
+  }),
+  title: (input) => `bg output: ${String(input.task_id ?? 'list')}`,
+  async execute(input, ctx) {
+    const tasks = ctx.session.bgTasks;
+
+    if (!input.task_id) {
+      if (tasks.size === 0) return 'No background tasks.';
+      return [...tasks.values()]
+        .map(
+          (task) =>
+            `${task.id} ${processAlive(task.pid) ? 'running' : 'exited'} — ${task.command.slice(0, 80)}`,
+        )
+        .join('\n');
+    }
+
+    const id = String(input.task_id);
+    const task = tasks.get(id);
+    if (!task) {
+      throw new Error(`Unknown task_id ${id}. Known: ${[...tasks.keys()].join(', ') || '(none)'}`);
+    }
+
+    if (input.wait === true) {
+      const deadline = Date.now() + 5_000;
+      while (processAlive(task.pid) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
+    }
+
+    const log = await fs.readFile(task.logPath, 'utf8').catch(() => '');
+    const lines = log.split('\n');
+    const tail = lines.slice(-200).join('\n');
+    return `${processAlive(task.pid) ? 'running' : 'exited'} ${task.id} (pid ${task.pid})\n${tail || '(no output yet)'}`;
+  },
+};
+
 export const bashTool: AgentTool = {
   name: 'bash',
   description:
@@ -319,6 +375,11 @@ export const bashTool: AgentTool = {
     command: z.string().describe('Shell command to run'),
     timeout_ms: z.number().int().min(1000).max(600_000).nullable().optional().describe('Timeout in ms'),
     description: z.string().nullable().optional().describe('Short description of what the command does'),
+    run_in_background: z
+      .boolean()
+      .nullable()
+      .optional()
+      .describe('Run detached; returns a task id immediately. Read output later via bash_output'),
   }),
   title: (input) => {
     const command = String(input.command ?? '');
@@ -340,6 +401,46 @@ export const bashTool: AgentTool = {
       `transcode-${process.pid}-${cwdFileCounter++}-cwd`,
     );
     const wrapped = buildWrappedCommand(command, shell, snapshotPath, cwdFilePath);
+
+    // Background mode: spawn detached with output to a log file, return now.
+    if (input.run_in_background === true) {
+      const id = `bg-${session.bgTasks.size + 1}`;
+      const logPath = path.join(
+        tmpdir(),
+        `transcode-bg-${process.pid}-${session.bgTasks.size + 1}.log`,
+      );
+      const log = await fs.open(logPath, 'w');
+      const child = spawn(shell, shellSpawnArgs(shell, snapshotPath, wrapped), {
+        cwd,
+        env: { ...process.env, SHELL: shell, GIT_EDITOR: 'true', TRANSCODE: '1' },
+        stdio: ['ignore', log.fd, log.fd],
+        detached: true,
+        windowsHide: true,
+      });
+      session.bgTasks.set(id, {
+        id,
+        pid: child.pid ?? -1,
+        logPath,
+        command,
+        startedAt: Date.now(),
+      });
+      child.on('close', (code) => {
+        void fs.appendFile(logPath, `\n[exit] code=${code ?? 'null'}\n`).catch(() => {});
+        try {
+          const newCwd = fromPosixPath(readFileSync(cwdFilePath, 'utf8').trim());
+          if (newCwd) session.cwd = newCwd;
+          unlinkSync(cwdFilePath);
+        } catch {
+          // best effort
+        }
+        void log.close().catch(() => {});
+      });
+      child.unref();
+      return (
+        `Background task ${id} started (pid ${child.pid}). ` +
+        `Read its output with bash_output using task_id "${id}" (wait: true to block briefly).`
+      );
+    }
 
     return await new Promise<string>((resolve) => {
       const child = spawn(shell, shellSpawnArgs(shell, snapshotPath, wrapped), {

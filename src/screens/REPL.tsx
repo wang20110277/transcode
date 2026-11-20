@@ -186,11 +186,14 @@ export default function REPL({ ctx }: REPLProps) {
   );
 
   const runChat = useCallback(
-    async (text: string, display?: string) => {
+    async (text: string, display?: string, options?: { planMode?: boolean }) => {
       setBusyBoth(true);
       const controller = new AbortController();
       abortRef.current = controller;
       addHistory({ input: display ?? text, output: '' });
+      if (options?.planMode) {
+        appendChatOutput('［plan 模式：只读探索，产出方案，PLAN READY 后可让我执行］\n');
+      }
 
       try {
         const provider =
@@ -219,7 +222,10 @@ export default function REPL({ ctx }: REPLProps) {
           model: provider?.model,
           cwd: process.cwd(),
           messages: messagesRef.current,
-          systemPrompt,
+          systemPrompt: options?.planMode
+            ? `${systemPrompt}\n\nPLAN MODE: explore read-only, then output a numbered implementation plan with exact files and changes. End with the line PLAN READY. Do not modify anything.`
+            : systemPrompt,
+          planMode: options?.planMode === true,
           signal: controller.signal,
           toolSession: toolSessionRef.current,
           onEvent: event => {
@@ -446,6 +452,21 @@ export default function REPL({ ctx }: REPLProps) {
       enterModelSelect();
       commitInput('');
       dragFlush();
+      return;
+    }
+
+    if (cmdName === 'plan') {
+      const task = stripped.startsWith('/plan') ? stripped.slice(5).trim() : stripped;
+      if (!task) {
+        addHistory({ input: trimmed, output: '用法：/plan <任务描述> — 只读探索并产出实施方案（PLAN READY），确认后再执行' });
+        dragFlush();
+        commitInput('');
+        return;
+      }
+      commitInput('');
+      setHistoryIndex(-1);
+      setSavedInput('');
+      await runChat(task, trimmed, { planMode: true });
       return;
     }
 
