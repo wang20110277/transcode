@@ -29,7 +29,13 @@ const GIT_BASH_CANDIDATES = [
   `${process.env.LOCALAPPDATA ?? ''}\\Programs\\Git\\bin\\bash.exe`,
 ].filter((candidate) => candidate.length > 0);
 
-/** Pure, testable shell resolution: override → SHELL → Git Bash probe → /bin/bash. */
+/** PowerShell probe locations (pwsh 7 preferred over Windows PowerShell 5). */
+const POWERSHELL_CANDIDATES = [
+  'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+  `${process.env.ProgramFiles ?? 'C:\\Program Files'}\\PowerShell\\7\\pwsh.exe`,
+];
+
+/** Pure, testable shell resolution: override → SHELL → Git Bash → PowerShell → /bin/bash. */
 export function detectShellWith(
   platform: NodeJS.Platform,
   exists: (file: string) => boolean,
@@ -44,6 +50,10 @@ export function detectShellWith(
   if (platform === 'win32') {
     const gitBash = GIT_BASH_CANDIDATES.find((candidate) => exists(candidate));
     if (gitBash) return gitBash;
+    const pwsh = POWERSHELL_CANDIDATES.find((candidate) => exists(candidate));
+    if (pwsh) return pwsh;
+    // powershell.exe ships with every Windows and resolves via PATH.
+    return 'powershell.exe';
   }
   return '/bin/bash';
 }
@@ -54,6 +64,15 @@ function detectShell(): string {
 
 function isZsh(shell: string): boolean {
   return shell.includes('zsh');
+}
+
+export function isPowerShell(shell: string): boolean {
+  return /(?:^|[\\/])(?:pwsh|powershell)(?:\.exe)?$/i.test(shell.trim());
+}
+
+/** PowerShell single-quoting: only ' needs doubling. */
+export function psQuote(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
 }
 
 function rcFileFor(shell: string): string {
@@ -208,14 +227,24 @@ async function resolveSpawnCwd(session: ToolSession): Promise<string> {
 /**
  * Wraps the user command so the snapshot is sourced, extended globs are
  * disabled (security), and the physical cwd is captured even when the
- * command fails.
+ * command fails. PowerShell runs an analogous wrapper: Invoke-Expression
+ * instead of eval, Out-File instead of pwd -P >|, no snapshot (NoProfile).
  */
-function buildWrappedCommand(
+export function buildWrappedCommand(
   command: string,
   shell: string,
   snapshotPath: string | undefined,
   cwdFilePath: string,
 ): string {
+  if (isPowerShell(shell)) {
+    return [
+      `Invoke-Expression ${psQuote(command)}`,
+      '$__transcode_rc = if ($?) { 0 } else { 1 }',
+      `try { (Get-Location).ProviderPath | Out-File -FilePath ${psQuote(cwdFilePath)} -Encoding ascii } catch {}`,
+      'exit $__transcode_rc',
+    ].join('\n');
+  }
+
   const parts: string[] = [];
   if (snapshotPath) {
     parts.push(`source ${shellQuote(toPosixPath(snapshotPath))} 2>/dev/null || true`);
@@ -239,6 +268,18 @@ export function killTreeCommand(
 ): { file: string; args: string[] } | null {
   if (platform !== 'win32') return null;
   return { file: 'taskkill', args: ['/pid', String(pid), '/T', '/F'] };
+}
+
+/** Spawn argv for the configured shell (testable). */
+export function shellSpawnArgs(
+  shell: string,
+  snapshotPath: string | undefined,
+  wrapped: string,
+): string[] {
+  if (isPowerShell(shell)) {
+    return ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', wrapped];
+  }
+  return snapshotPath ? ['-c', wrapped] : ['-l', '-c', wrapped];
 }
 
 function killProcessGroup(pid: number | undefined, signal: NodeJS.Signals): void {
@@ -290,7 +331,9 @@ export const bashTool: AgentTool = {
 
     const session = ctx.session;
     const shell = detectShell();
-    const snapshotPath = await getSnapshot(session, shell);
+    const snapshotPath = isPowerShell(shell)
+      ? undefined
+      : await getSnapshot(session, shell);
     const cwd = await resolveSpawnCwd(session);
     const cwdFilePath = path.join(
       tmpdir(),
@@ -299,7 +342,7 @@ export const bashTool: AgentTool = {
     const wrapped = buildWrappedCommand(command, shell, snapshotPath, cwdFilePath);
 
     return await new Promise<string>((resolve) => {
-      const child = spawn(shell, snapshotPath ? ['-c', wrapped] : ['-l', '-c', wrapped], {
+      const child = spawn(shell, shellSpawnArgs(shell, snapshotPath, wrapped), {
         cwd,
         env: { ...process.env, SHELL: shell, GIT_EDITOR: 'true', TRANSCODE: '1' },
         stdio: ['ignore', 'pipe', 'pipe'],

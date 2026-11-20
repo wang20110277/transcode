@@ -42,11 +42,12 @@ describe('detectShellWith', () => {
     expect(detectShellWith('linux', () => false, { SHELL: '/usr/bin/zsh' })).toBe('/usr/bin/zsh');
   });
 
-  test('win32 probes Git Bash locations before falling back', () => {
+  test('win32 probes Git Bash, then PowerShell, before the POSIX fallback', () => {
     expect(detectShellWith('win32', (p) => p === 'C:\\Program Files\\Git\\bin\\bash.exe', {})).toBe(
       'C:\\Program Files\\Git\\bin\\bash.exe',
     );
-    expect(detectShellWith('win32', () => false, {})).toBe('/bin/bash');
+    // No Git Bash and no pwsh on disk → Windows PowerShell via PATH.
+    expect(detectShellWith('win32', () => false, {})).toBe('powershell.exe');
   });
 });
 

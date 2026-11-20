@@ -203,10 +203,26 @@ function segmentIsReadOnly(tokens: string[]): boolean {
   return SAFE_COMMANDS.has(base);
 }
 
+/** PowerShell cmdlets that only read. */
+const POWERSHELL_SAFE = new Set([
+  'get-childitem', 'get-content', 'get-item', 'get-itemproperty', 'get-location',
+  'get-command', 'get-process', 'get-service', 'get-date', 'get-variable',
+  'select-string', 'measure-object', 'where-object', 'sort-object', 'foreach-object',
+  'compare-object', 'format-list', 'format-table', 'set-location', 'out-string',
+]);
+
 /** True when the command can run without a permission prompt. */
 export function isReadOnlyCommand(command: string): boolean {
   const { segments, unsafe } = parseSegments(command);
   if (unsafe) return false;
   if (segments.length === 0) return false;
+
+  // PowerShell cmdlets are Verb-Noun (dashed); only then consult the PS set.
+  const firstTokens = segments.map((segment) => segment.tokens[0]?.toLowerCase() ?? '');
+  const isCmdlet = (token: string) => /^[a-z]+-[a-z][a-z0-9]*$/.test(token);
+  if (firstTokens.some(isCmdlet)) {
+    return firstTokens.every((token) => isCmdlet(token) && POWERSHELL_SAFE.has(token));
+  }
+
   return segments.every((segment) => segmentIsReadOnly(segment.tokens));
 }
