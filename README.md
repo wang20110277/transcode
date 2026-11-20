@@ -12,6 +12,8 @@
 - Bun >= 1.3
 - 至少一个模型提供商的 API Key
 
+**平台**：macOS / Linux 原生支持。Windows 需安装 [Git Bash](https://git-scm.com/)（bash 工具自动探测 `C:\Program Files\Git\bin\bash.exe` 等常见位置；也可用 `TRANSCODE_SHELL` 显式指定），超时终止走 `taskkill /T /F` 杀进程树，路径在 Windows/Git-Bash 两种形态间自动转换。纯 PowerShell 环境（无 Git Bash）暂不支持。
+
 ```bash
 bun install
 ```

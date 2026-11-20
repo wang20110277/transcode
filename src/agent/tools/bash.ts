@@ -1,12 +1,13 @@
 import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
-import { readFileSync, unlinkSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, readFileSync, unlinkSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import type { AgentTool } from './types.js';
 import type { ToolSession } from './session.js';
 import { isReadOnlyCommand } from './read-only.js';
+import { fromPosixPath, toPosixPath } from './shell-paths.js';
 
 const MAX_BASH_OUTPUT = 30_000;
 const TRUNCATE_HEAD = 15_000;
@@ -21,10 +22,34 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-function detectShell(): string {
-  const shell = process.env.SHELL ?? '';
-  if (shell.includes('bash') || shell.includes('zsh')) return shell;
+/** Git Bash probe locations for Windows (Claude Code's list). */
+const GIT_BASH_CANDIDATES = [
+  'C:\\Program Files\\Git\\bin\\bash.exe',
+  'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
+  `${process.env.LOCALAPPDATA ?? ''}\\Programs\\Git\\bin\\bash.exe`,
+].filter((candidate) => candidate.length > 0);
+
+/** Pure, testable shell resolution: override → SHELL → Git Bash probe → /bin/bash. */
+export function detectShellWith(
+  platform: NodeJS.Platform,
+  exists: (file: string) => boolean,
+  env: { TRANSCODE_SHELL?: string; SHELL?: string },
+): string {
+  const override = env.TRANSCODE_SHELL?.trim();
+  if (override) return override;
+
+  const envShell = env.SHELL?.trim() ?? '';
+  if (envShell.includes('bash') || envShell.includes('zsh')) return envShell;
+
+  if (platform === 'win32') {
+    const gitBash = GIT_BASH_CANDIDATES.find((candidate) => exists(candidate));
+    if (gitBash) return gitBash;
+  }
   return '/bin/bash';
+}
+
+function detectShell(): string {
+  return detectShellWith(process.platform, existsSync, process.env);
 }
 
 function isZsh(shell: string): boolean {
@@ -32,7 +57,9 @@ function isZsh(shell: string): boolean {
 }
 
 function rcFileFor(shell: string): string {
-  const home = process.env.HOME ?? tmpdir();
+  // $HOME first (POSIX convention, also overridable in tests), os.homedir()
+  // as the Windows fallback (USERPROFILE), tmpdir as the last resort.
+  const home = process.env.HOME?.trim() || homedir() || tmpdir();
   return isZsh(shell) ? path.join(home, '.zshrc') : path.join(home, '.bashrc');
 }
 
@@ -69,8 +96,8 @@ function snapshotScript(shell: string, snapshotPath: string, rcFile: string, rcE
       ? ''
       : 'echo "shopt -s expand_aliases" >> "$SNAPSHOT_FILE"';
 
-  return `SNAPSHOT_FILE=${shellQuote(snapshotPath)}
-    ${rcExists ? `source ${shellQuote(rcFile)} < /dev/null` : '# No user config file to source'}
+  return `SNAPSHOT_FILE=${shellQuote(toPosixPath(snapshotPath))}
+    ${rcExists ? `source ${shellQuote(toPosixPath(rcFile))} < /dev/null` : '# No user config file to source'}
 
     echo "# Snapshot file" >| "$SNAPSHOT_FILE"
 
@@ -117,6 +144,7 @@ async function createSnapshot(shell: string): Promise<string | undefined> {
         ['-l', '-c', snapshotScript(shell, snapshotPath, rcFile, rcExists)],
         {
           stdio: 'ignore',
+          windowsHide: true,
           env: { ...process.env, SHELL: shell, GIT_EDITOR: 'true', TRANSCODE: '1' },
         },
       );
@@ -190,7 +218,7 @@ function buildWrappedCommand(
 ): string {
   const parts: string[] = [];
   if (snapshotPath) {
-    parts.push(`source ${shellQuote(snapshotPath)} 2>/dev/null || true`);
+    parts.push(`source ${shellQuote(toPosixPath(snapshotPath))} 2>/dev/null || true`);
   }
   parts.push(
     isZsh(shell)
@@ -199,13 +227,27 @@ function buildWrappedCommand(
   );
   parts.push(`eval ${shellQuote(command)}`);
   parts.push('__transcode_rc=$?');
-  parts.push(`pwd -P >| ${shellQuote(cwdFilePath)}`);
+  parts.push(`pwd -P >| ${shellQuote(toPosixPath(cwdFilePath))}`);
   parts.push('exit $__transcode_rc');
   return parts.join('\n');
 }
 
+/** Windows kills the tree via taskkill; POSIX uses the process-group kill. */
+export function killTreeCommand(
+  pid: number,
+  platform: NodeJS.Platform,
+): { file: string; args: string[] } | null {
+  if (platform !== 'win32') return null;
+  return { file: 'taskkill', args: ['/pid', String(pid), '/T', '/F'] };
+}
+
 function killProcessGroup(pid: number | undefined, signal: NodeJS.Signals): void {
   if (pid === undefined) return;
+  const tree = killTreeCommand(pid, process.platform);
+  if (tree) {
+    spawn(tree.file, tree.args, { stdio: 'ignore', windowsHide: true });
+    return;
+  }
   try {
     process.kill(-pid, signal);
   } catch {
@@ -262,6 +304,7 @@ export const bashTool: AgentTool = {
         env: { ...process.env, SHELL: shell, GIT_EDITOR: 'true', TRANSCODE: '1' },
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: true,
+        windowsHide: true,
       });
 
       let stdout = '';
@@ -299,7 +342,7 @@ export const bashTool: AgentTool = {
 
         // Sync read so callers awaiting execute() see the updated cwd immediately.
         try {
-          const newCwd = readFileSync(cwdFilePath, 'utf8').trim();
+          const newCwd = fromPosixPath(readFileSync(cwdFilePath, 'utf8').trim());
           if (newCwd) session.cwd = newCwd;
         } catch {
           // Command exited before pwd ran (e.g. `exit`); keep the previous cwd.
