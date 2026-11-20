@@ -85,6 +85,7 @@ export default function REPL({ ctx }: REPLProps) {
   const [pendingDisplayName, setPendingDisplayName] = useState('');
   const [keyHint, setKeyHint] = useState<string | null>(null);
   const [customBaseDraft, setCustomBaseDraft] = useState('');
+  const [customKeyDraft, setCustomKeyDraft] = useState('');
 
   const models = getAvailableModels();
   // Bun's scheduler can drop the render flush for updates issued from the
@@ -318,6 +319,8 @@ export default function REPL({ ctx }: REPLProps) {
       setPendingSpec(null);
       setPendingDisplayName('');
       setKeyHint(null);
+      setCustomBaseDraft('');
+      setCustomKeyDraft('');
       setVendor(null);
       setPhase('idle');
       dragFlush();
@@ -325,26 +328,17 @@ export default function REPL({ ctx }: REPLProps) {
     [ctx, addHistory, dragFlush],
   );
 
-  const handleApiKey = useCallback(
-    async (value: string) => {
-      const spec = pendingSpec!;
-      const savedKey = lookupApiKey(spec);
-      const apiKey = value.trim() || savedKey;
-
-      if (!apiKey) {
-        addHistory({ input: '••••••••', output: 'API key 不能为空。' });
-        return; // stay on the key prompt
-      }
-
+  /** Verify a selection and apply it, or surface the error and re-prompt. */
+  const finalizeSelection = useCallback(
+    async (spec: string, displayName: string, apiKey: string) => {
       if (process.env.TRANSCODE_SKIP_MODEL_CHECK === '1') {
-        applyModelSwitch(spec, pendingDisplayName, apiKey, '已跳过连通性测试');
+        applyModelSwitch(spec, displayName, apiKey, '已跳过连通性测试');
         return;
       }
-
       setPhase('model_check');
       const result = await verifyModel(spec, apiKey);
       if (result.ok) {
-        applyModelSwitch(spec, pendingDisplayName, apiKey, `✓ ${result.message}`);
+        applyModelSwitch(spec, displayName, apiKey, `✓ ${result.message}`);
         return;
       }
       addHistory({
@@ -355,7 +349,55 @@ export default function REPL({ ctx }: REPLProps) {
       commitInput('');
       dragFlush();
     },
-    [pendingSpec, pendingDisplayName, addHistory, applyModelSwitch, commitInput, dragFlush],
+    [applyModelSwitch, addHistory, commitInput, dragFlush],
+  );
+
+  const handleApiKey = useCallback(
+    async (value: string) => {
+      // Custom-gateway setup: collect the key, then pick the model from the
+      // gateway's live list instead of asking for a blind model name.
+      if (pendingSpec === null && pendingModel === null && customBaseDraft) {
+        const apiKey = value.trim() || lookupApiKey('custom');
+        if (!apiKey) {
+          addHistory({ input: '••••••••', output: 'API key 不能为空。' });
+          return;
+        }
+        setCustomKeyDraft(apiKey);
+        setPickOptions([]);
+        setPickCursor(0);
+        setPickLive(false);
+        setPhase('model_pick');
+        commitInput('');
+        setPickLoading(true);
+        const live = await listEndpointModels('', { baseUrl: customBaseDraft, apiKey });
+        setPickOptions(live);
+        setPickLive(live.length > 0);
+        setPickLoading(false);
+        dragFlush();
+        return;
+      }
+
+      const spec = pendingSpec!;
+      const savedKey = lookupApiKey(spec);
+      const apiKey = value.trim() || savedKey;
+
+      if (!apiKey) {
+        addHistory({ input: '••••••••', output: 'API key 不能为空。' });
+        return; // stay on the key prompt
+      }
+
+      await finalizeSelection(spec, pendingDisplayName, apiKey);
+    },
+    [
+      pendingSpec,
+      pendingModel,
+      pendingDisplayName,
+      customBaseDraft,
+      addHistory,
+      finalizeSelection,
+      commitInput,
+      dragFlush,
+    ],
   );
 
   const handleSubmit = useCallback(async (raw: string) => {
@@ -374,7 +416,9 @@ export default function REPL({ ctx }: REPLProps) {
         return;
       }
       setCustomBaseDraft(trimmed);
-      setPhase('model_name');
+      setKeyHint(lookupApiKey('custom') ? maskKey(lookupApiKey('custom')!) : null);
+      setPendingSpec(null);
+      setPhase('model_apikey');
       commitInput('');
       return;
     }
@@ -382,9 +426,9 @@ export default function REPL({ ctx }: REPLProps) {
     if (phase === 'model_name') {
       if (!trimmed) return;
       if (pendingModel === null) {
-        // Custom gateway: base URL collected, now the model name.
+        // Custom gateway, free-text model name (live list was empty/unreachable).
         setCustomModel({ baseUrl: customBaseDraft, model: trimmed });
-        beginKeyStep('custom', `custom/${trimmed}`);
+        await finalizeSelection('custom', `custom/${trimmed}`, customKeyDraft);
       } else {
         beginKeyStep(vendorModelSpec(pendingModel, trimmed), `${pendingModel}/${trimmed}`);
       }
@@ -551,7 +595,13 @@ export default function REPL({ ctx }: REPLProps) {
           return;
         }
         const modelName = pickOptions[pickCursor]!;
-        beginKeyStep(vendorModelSpec(pendingModel!, modelName), `${pendingModel}/${modelName}`);
+        if (pendingModel === null && customBaseDraft) {
+          // Custom gateway: model chosen from the live list.
+          setCustomModel({ baseUrl: customBaseDraft, model: modelName });
+          void finalizeSelection('custom', `custom/${modelName}`, customKeyDraft);
+        } else {
+          beginKeyStep(vendorModelSpec(pendingModel!, modelName), `${pendingModel}/${modelName}`);
+        }
         commitInput('');
         return;
       }
@@ -713,6 +763,9 @@ export default function REPL({ ctx }: REPLProps) {
 
       {phase === 'model_pick' && (
         <Box flexDirection="column" marginLeft={2}>
+          {pendingModel === null && customBaseDraft && (
+            <Text color="gray" dimColor>自定义网关 {customBaseDraft} 的模型：</Text>
+          )}
           {pickOptions.map((name, i) => (
             <Box key={name}>
               <Text color={i === pickCursor ? 'cyan' : undefined}>

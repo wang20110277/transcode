@@ -43,6 +43,12 @@ describe('listEndpointModels', () => {
     expect(models).toEqual(['glm-4.6', 'glm-5.1', 'glm-5.3-flash']); // sorted
   });
 
+  test('override form queries an unsaved custom gateway with its key', async () => {
+    const baseUrl = stubModelsEndpoint(['m1', 'm2']);
+    const models = await listEndpointModels('', { baseUrl, apiKey: 'k' });
+    expect(models).toEqual(['m1', 'm2']);
+  });
+
   test('returns an empty list on failure so callers can fall back', async () => {
     registerApiKey('deepseek', 'k');
     const models = await listEndpointModels('deepseek'); // real URL, no network in test env → fails fast? may hit network…

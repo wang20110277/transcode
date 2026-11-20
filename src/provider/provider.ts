@@ -585,16 +585,19 @@ export function getRouting(): Record<string, string> {
  * Live model list from an endpoint's OpenAI-compatible GET /models, so the
  * /models picker shows what the gateway actually serves (Zhipu's coding
  * endpoint, for one, maps old names to newer generations). Empty list on
- * any failure — callers fall back to the curated list.
+ * any failure — callers fall back to the curated list. The override form
+ * queries an in-progress custom gateway before it is saved.
  */
-export async function listEndpointModels(specOrId: string): Promise<string[]> {
+export async function listEndpointModels(
+  specOrId: string,
+  override?: { baseUrl: string; apiKey?: string },
+): Promise<string[]> {
   try {
-    const resolved = resolveModel(specOrId);
-    const baseUrl = baseUrlFor(resolved);
+    const baseUrl = (override?.baseUrl ?? baseUrlFor(resolveModel(specOrId)))?.replace(/\/$/, '');
     if (!baseUrl) return [];
-    const apiKey = lookupApiKey(resolved.id);
+    const apiKey = override?.apiKey ?? lookupApiKey(resolveModel(specOrId).id);
     const response = await Promise.race([
-      fetch(`${baseUrl.replace(/\/$/, '')}/models`, {
+      fetch(`${baseUrl}/models`, {
         headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
       }),
       new Promise<Response>((_, reject) =>
