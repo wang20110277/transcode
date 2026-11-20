@@ -9,6 +9,7 @@ import {
   registerApiKey,
   lookupApiKey,
   setCustomModel,
+  listEndpointModels,
   vendorModelSpec,
   vendorModels,
   verifyModel,
@@ -68,10 +69,18 @@ export default function REPL({ ctx }: REPLProps) {
     fail: number;
   } | null>(null);
   const [pendingModel, setPendingModel] = useState<ModelId | null>(null);
+  const pendingModelRef = useRef<ModelId | null>(null);
+  const setVendor = (id: ModelId | null) => {
+    pendingModelRef.current = id;
+    setPendingModel(id);
+  };
   const [modelCursor, setModelCursor] = useState(0);
   // Model selection flow: vendor → model → key (reused if saved) → check.
   const [pickOptions, setPickOptions] = useState<string[]>([]);
   const [pickCursor, setPickCursor] = useState(0);
+  const [pickLive, setPickLive] = useState(false);
+  const [pickLoading, setPickLoading] = useState(false);
+  const vendorModelCache = useRef(new Map<string, string[]>());
   const [pendingSpec, setPendingSpec] = useState<string | null>(null);
   const [pendingDisplayName, setPendingDisplayName] = useState('');
   const [keyHint, setKeyHint] = useState<string | null>(null);
@@ -309,7 +318,7 @@ export default function REPL({ ctx }: REPLProps) {
       setPendingSpec(null);
       setPendingDisplayName('');
       setKeyHint(null);
-      setPendingModel(null);
+      setVendor(null);
       setPhase('idle');
       dragFlush();
     },
@@ -456,7 +465,7 @@ export default function REPL({ ctx }: REPLProps) {
       }
       if (phase !== 'idle') {
         setPhase('idle');
-        setPendingModel(null);
+        setVendor(null);
         commitInput('');
         addHistory({ input: '', output: 'Cancelled.' });
         return;
@@ -482,7 +491,7 @@ export default function REPL({ ctx }: REPLProps) {
         const selected = models[modelCursor];
         if (selected.id === 'custom') {
           const saved = loadConfig().custom;
-          setPendingModel(null);
+          setVendor(null);
           if (saved?.baseUrl && saved.model) {
             beginKeyStep('custom', `custom/${saved.model}`);
           } else {
@@ -491,12 +500,35 @@ export default function REPL({ ctx }: REPLProps) {
           }
           return;
         }
-        setPendingModel(selected.id);
-        const options = vendorModels(selected.id);
-        setPickOptions(options);
+        setVendor(selected.id);
+        setPickOptions(vendorModels(selected.id));
         setPickCursor(0);
+        setPickLive(false);
         setPhase('model_pick');
         commitInput('');
+
+        // Prefer the endpoint's live model list (what it actually serves)
+        // over the curated fallback; cache per vendor for this process.
+        const vendor = selected.id;
+        const cached = vendorModelCache.current.get(vendor);
+        if (cached) {
+          if (cached.length > 0) {
+            setPickOptions(cached);
+            setPickLive(true);
+          }
+        } else {
+          setPickLoading(true);
+          void listEndpointModels(vendor)
+            .then((live) => {
+              vendorModelCache.current.set(vendor, live);
+              if (live.length > 0 && pendingModelRef.current === vendor) {
+                setPickOptions(live);
+                setPickCursor(0);
+                setPickLive(true);
+              }
+            })
+            .finally(() => setPickLoading(false));
+        }
         return;
       }
       if (key.upArrow) {
@@ -695,6 +727,8 @@ export default function REPL({ ctx }: REPLProps) {
               自定义模型名…
             </Text>
           </Box>
+          {pickLoading && <Text color="gray" dimColor>… 正在从网关获取实时模型列表</Text>}
+          {!pickLoading && pickLive && <Text color="gray" dimColor>（网关实时列表）</Text>}
           <Text color="gray" dimColor>↑↓ 选择模型 · Enter 确认</Text>
         </Box>
       )}

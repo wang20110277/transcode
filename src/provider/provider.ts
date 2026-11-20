@@ -581,6 +581,37 @@ export function getRouting(): Record<string, string> {
   return { ...(loadConfig().routing ?? {}) };
 }
 
+/**
+ * Live model list from an endpoint's OpenAI-compatible GET /models, so the
+ * /models picker shows what the gateway actually serves (Zhipu's coding
+ * endpoint, for one, maps old names to newer generations). Empty list on
+ * any failure — callers fall back to the curated list.
+ */
+export async function listEndpointModels(specOrId: string): Promise<string[]> {
+  try {
+    const resolved = resolveModel(specOrId);
+    const baseUrl = baseUrlFor(resolved);
+    if (!baseUrl) return [];
+    const apiKey = lookupApiKey(resolved.id);
+    const response = await Promise.race([
+      fetch(`${baseUrl.replace(/\/$/, '')}/models`, {
+        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+      }),
+      new Promise<Response>((_, reject) =>
+        setTimeout(() => reject(new Error('timeout')), 5_000),
+      ),
+    ]);
+    if (!response.ok) return [];
+    const body = (await response.json()) as { data?: Array<{ id?: string }> };
+    const ids = (body.data ?? [])
+      .map((entry) => entry?.id)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0);
+    return [...new Set(ids)].sort();
+  } catch {
+    return [];
+  }
+}
+
 /** Set (or clear with "-") a role's profile. */
 export function setRouting(role: string, profile: string): void {
   if (!role.trim()) throw new Error('Role name cannot be empty.');
