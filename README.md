@@ -41,7 +41,10 @@ export OPENAI_API_KEY=...
 export TRANSCODE_MODEL=openai:gpt-4o
 ```
 
-**2. REPL 交互配置**（`/models`）：三级流程——选厂商 → 选模型（常用列表 + 自定义模型名）→ 输入 key（已存的可回车沿用）。key 确认后**自动测试连通性**，失败显示 API 原始报错并可重输。`custom` 支持任意 OpenAI 兼容网关（输入 base URL + 模型名）。
+**2. REPL 交互配置**（`/models`）：三级流程——选厂商 → 选模型 → 输入 key（已存的可回车沿用）。
+- 模型列表**从网关实时拉取**（`GET /v1/models`，标"网关实时列表"），选的就是实际可用的；网关不提供列表时回退内置精选列表 + "自定义模型名…"自由输入
+- key 确认后**自动测试连通性**，显示端点**实际调度的模型**（如智谱 Coding 端点会把 `glm-4.6` 映射为套餐当前的 `glm-5.3-flash`，测试会如实亮出）；失败显示 API 原始报错并可重输
+- `custom` 支持任意 OpenAI 兼容网关：base URL → key → **从网关实时模型列表中选**（OneAPI/NewAPI/自建中转即插即见），无需盲填模型名
 
 **3. 档案 + 角色路由**（`~/.transcode.json`，任务级模型分派）：
 
