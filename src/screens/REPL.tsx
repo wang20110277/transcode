@@ -56,9 +56,11 @@ type PromptPhase =
 
 interface REPLProps {
   ctx: CommandContext;
+  /** Background auto-update outcome; a non-null message shows as a banner. */
+  updateNotice?: Promise<string | null>;
 }
 
-export default function REPL({ ctx }: REPLProps) {
+export default function REPL({ ctx, updateNotice }: REPLProps) {
   const { exit } = useApp();
   const [input, setInput] = useState('');
   // Multiple keystrokes can be handled in one React batch before a
@@ -178,6 +180,21 @@ export default function REPL({ ctx }: REPLProps) {
     setSlashCursor(0);
     if (slashPrefix === null) setSlashDismissed(false);
   }, [slashPrefix]);
+
+  // Background auto-update outcome: surface as a history banner once settled.
+  useEffect(() => {
+    if (!updateNotice) return;
+    let cancelled = false;
+    void updateNotice.then(message => {
+      if (!cancelled && message) {
+        addHistory({ input: '', output: message });
+        dragFlush();
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [updateNotice, addHistory, dragFlush]);
   const pendingPermissionRef = useRef<{
     request: PermissionRequest;
     resolve: (allow: boolean) => void;

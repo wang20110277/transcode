@@ -60,6 +60,9 @@ export async function runCli(argv: string[]): Promise<void> {
     return;
   }
 
-  // Default: interactive Ink REPL.
+  // Default: interactive Ink REPL. The auto-update runs in the background;
+  // its notice reaches the REPL through autoUpdateNotice() once settled.
+  const { startAutoUpdate } = await import('./upgrade.js');
+  startAutoUpdate();
   await import('./main.js');
 }

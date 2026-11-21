@@ -5,6 +5,7 @@ import { type CommandContext } from './commands.js';
 import REPL from './screens/REPL.js';
 import { bannerLines } from './screens/banner.js';
 import { createKeyedStdin } from './tui/keyed-stdin.js';
+import { autoUpdateNotice } from './upgrade.js';
 import { VERSION } from './version.js';
 const DEFAULT_MODEL: string = preferredModelId() ?? 'opus';
 
@@ -50,7 +51,7 @@ function App() {
     <Box flexDirection="column">
       {/* A saved model choice (from the models flow) wins over the env label */}
       <Banner modelId={modelId} cwd={cwd} envLabel={preferredModelId() ? undefined : envModelLabel()} />
-      <REPL ctx={ctx} />
+      <REPL ctx={ctx} updateNotice={autoUpdateNotice()} />
     </Box>
   );
 }
