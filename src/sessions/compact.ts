@@ -19,11 +19,26 @@ export interface CompactModel {
   ): AsyncIterable<{ content: unknown }> | Promise<AsyncIterable<{ content: unknown }>>;
 }
 
-/** Rough token estimate for auto-compact: total content chars / 4. */
+/** Rough token estimate for auto-compact: total content chars / 4.
+ * Tool-call args are included — in a coding session they are often the
+ * largest text (write_file/edit payloads). */
 export function estimateTokens(messages: BaseMessage[]): number {
   let chars = 0;
-  for (const message of messages) chars += contentText(message.content).length;
+  for (const message of messages) {
+    chars += contentText(message.content).length;
+    const calls = (message as AIMessage).tool_calls;
+    if (calls?.length) chars += JSON.stringify(calls).length;
+  }
   return Math.floor(chars / 4);
+}
+
+/** Auto-compact decision. thresholdChars is in CHARS; estimateTokens is in
+ * tokens (chars/4) — convert back so units match. */
+export function shouldAutoCompact(
+  messages: BaseMessage[],
+  cfg: { thresholdChars: number },
+): boolean {
+  return estimateTokens(messages) * 4 >= cfg.thresholdChars;
 }
 
 /**

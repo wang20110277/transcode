@@ -31,7 +31,7 @@ import {
   type SessionRecord,
 } from '../sessions/store.js';
 import { listProjectSessions, resolveResumeTarget, splitResumeArgs } from '../sessions/resume.js';
-import { DEFAULT_KEEP_TURNS, compressSession, estimateTokens, parseKeepCount, transcriptEntries, splitTurns } from '../sessions/compact.js';
+import { DEFAULT_KEEP_TURNS, compressSession, parseKeepCount, shouldAutoCompact, transcriptEntries, splitTurns } from '../sessions/compact.js';
 import { walkFiles } from '../agent/tools/fs-utils.js';
 import { applyCompletion, filterFiles, mentionQuery } from './file-completion.js';
 import {
@@ -142,6 +142,9 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
   const conversationTitleRef = useRef('');
   // Compaction digest of turns older than the kept window (from resume//compact).
   const summaryRef = useRef<string | null>(null);
+  // Auto-compact breaker state: consecutive failures + warned-once flag.
+  const autoCompactFailuresRef = useRef(0);
+  const autoCompactWarnedRef = useRef(false);
   const lastSessionsRef = useRef<string[]>([]);
   // Snapshot for the /resume arrow-key picker (set together with the phase).
   const sessionPickerRef = useRef<SessionRecord[]>([]);
@@ -253,6 +256,9 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
           summaryRef.current = outcome.record.summary ?? null;
           messagesRef.current = outcome.record.messages;
           saveSession(outcome.record);
+          // Manual success heals the auto-compact breaker too.
+          autoCompactFailuresRef.current = 0;
+          autoCompactWarnedRef.current = false;
         } else {
           addHistory({ input: '', output: `⚠ 提炼失败(${outcome.error ?? '未知'}),已恢复完整对话。` });
         }
@@ -333,14 +339,12 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
   // Auto-compact (Claude Code style proactive): threshold check before each
   // turn, same runCompaction as /compact and resume. Circuit breaker stops
   // after 3 consecutive failures; auto failures warn once per session.
-  const autoCompactFailuresRef = useRef(0);
-  const autoCompactWarnedRef = useRef(false);
   const autoCompactIfNeeded = async (): Promise<void> => {
     const cfg = normalizeAutoCompact(loadConfig().autoCompact);
     if (!cfg.enabled || !conversationRef.current) return;
     if (process.env.TRANSCODE_MOCK === '1') return;
     if (autoCompactFailuresRef.current >= 3) return;
-    if (estimateTokens(messagesRef.current) < cfg.thresholdChars) return;
+    if (!shouldAutoCompact(messagesRef.current, cfg)) return;
     try {
       // Dedicated host entry before the question echo, so the digest neither
       // mixes into the turn entry nor receives the turn's streamed reply.
@@ -355,7 +359,13 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         summary: summaryRef.current,
       });
       const outcome = await runCompaction(record, cfg.keepTurns);
-      if (!outcome.compressed) throw new Error(outcome.error ?? '未知');
+      if (!outcome.compressed) {
+        // Without an error it is a no-op (≤ keepTurns turns — e.g. one giant
+        // turn over threshold): nothing compressible, skip without touching
+        // the breaker.
+        if (outcome.error) throw new Error(outcome.error);
+        return;
+      }
       summaryRef.current = outcome.record.summary ?? null;
       messagesRef.current = outcome.record.messages;
       saveSession(outcome.record);
@@ -856,6 +866,9 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
           summaryRef.current = outcome.record.summary ?? null;
           messagesRef.current = outcome.record.messages;
           saveSession(outcome.record);
+          // Manual success heals the auto-compact breaker too.
+          autoCompactFailuresRef.current = 0;
+          autoCompactWarnedRef.current = false;
           appendChatOutput(`已压缩:旧 ${turns.length - keepN} 轮提炼为前情提要,保留最近 ${keepN} 轮。`);
           for (const entry of transcriptEntries(summaryRef.current, messagesRef.current)) {
             addHistory(entry);

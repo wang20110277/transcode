@@ -8,6 +8,7 @@ import {
   compressSession,
   estimateTokens,
   parseKeepCount,
+  shouldAutoCompact,
   transcriptEntries,
   splitTurns,
 } from './compact.js';
@@ -167,6 +168,22 @@ describe('estimateTokens', () => {
       estimateTokens([new HumanMessage('x'.repeat(10)), new AIMessage('y'.repeat(30))]),
     ).toBe(10);
     expect(estimateTokens([new HumanMessage('abcd')])).toBe(1);
+  });
+
+  test('counts tool_calls args payloads (often the largest text)', () => {
+    const ai = new AIMessage({
+      content: '',
+      tool_calls: [{ id: 'c1', name: 'write_file', args: { content: 'x'.repeat(200) } }],
+    });
+    expect(estimateTokens([ai])).toBeGreaterThanOrEqual(50);
+  });
+});
+
+describe('shouldAutoCompact', () => {
+  test('compares in CHARS: at threshold triggers, just below does not', () => {
+    const cfg = { thresholdChars: 200 };
+    expect(shouldAutoCompact([new HumanMessage('a'.repeat(200))], cfg)).toBe(true);
+    expect(shouldAutoCompact([new HumanMessage('a'.repeat(196))], cfg)).toBe(false);
   });
 });
 
