@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { HumanMessage } from '@langchain/core/messages';
 import { saveSession, type SessionRecord } from './store.js';
-import { listProjectSessions, resolveResumeTarget } from './resume.js';
+import { listProjectSessions, resolveResumeTarget, splitResumeArgs } from './resume.js';
 
 let dir: string;
 beforeEach(() => {
@@ -88,5 +88,16 @@ describe('resolveResumeTarget', () => {
 
   test('unmatched target returns undefined', () => {
     expect(resolveResumeTarget('不存在', [], list)).toBeUndefined();
+  });
+});
+
+describe('splitResumeArgs', () => {
+  test('second arg is keep-raw only when it is pure digits', () => {
+    expect(splitResumeArgs(['部署', '脚本'])).toEqual({ target: '部署 脚本' });
+    expect(splitResumeArgs(['3', '5'])).toEqual({ target: '3', keepRaw: '5' });
+    expect(splitResumeArgs(['3', '0'])).toEqual({ target: '3', keepRaw: '0' });
+    expect(splitResumeArgs(['3', 'abc'])).toEqual({ target: '3 abc' });
+    expect(splitResumeArgs(['3'])).toEqual({ target: '3' });
+    expect(splitResumeArgs([])).toEqual({ target: '' });
   });
 });

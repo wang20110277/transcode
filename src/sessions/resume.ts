@@ -6,6 +6,19 @@ export function listProjectSessions(cwd: string): SessionRecord[] {
 }
 
 /**
+ * Split /resume args: the second token is a keep-turns attempt ONLY when it
+ * is pure digits; otherwise all tokens join into the target (multi-word
+ * title fragments keep working).
+ */
+export function splitResumeArgs(args: string[]): { target: string; keepRaw?: string } {
+  const hasKeepArg = args.length > 1 && /^\d+$/.test(args[1]!);
+  return {
+    target: (hasKeepArg ? args[0] : args.join(' ')).trim(),
+    ...(hasKeepArg ? { keepRaw: args[1] } : {}),
+  };
+}
+
+/**
  * Resolve a /resume argument to a session record.
  * Blank target → undefined (caller opens the picker). Numeric → the last
  * listed session at that index (falling back to list order). Otherwise

@@ -29,7 +29,7 @@ import {
   searchSessions,
   type SessionRecord,
 } from '../sessions/store.js';
-import { listProjectSessions, resolveResumeTarget } from '../sessions/resume.js';
+import { listProjectSessions, resolveResumeTarget, splitResumeArgs } from '../sessions/resume.js';
 import { DEFAULT_KEEP_TURNS, compressSession, parseKeepCount, transcriptEntries, splitTurns } from '../sessions/compact.js';
 import { walkFiles } from '../agent/tools/fs-utils.js';
 import { applyCompletion, filterFiles, mentionQuery } from './file-completion.js';
@@ -706,11 +706,8 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
     }
 
     if (cmdName === 'resume') {
-      // args[1], when present, is the keep-turns attempt; the target keeps
-      // its original multi-word semantics when no second arg is given.
-      const hasKeepArg = args.length > 1;
-      const target = (hasKeepArg ? args[0] : args.join(' ')).trim();
-      const { keep, error } = parseKeepCount(hasKeepArg ? args[1] : undefined);
+      const { target, keepRaw } = splitResumeArgs(args);
+      const { keep, error } = parseKeepCount(keepRaw);
       if (error) addHistory({ input: '', output: `⚠ ${error}` });
       if (!target) {
         // One-step resume: arrow-key picker over this project's sessions.
