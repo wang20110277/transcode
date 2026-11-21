@@ -136,6 +136,14 @@ describe('session store', () => {
     expect(getSession('ses_test1')?.title).toBe('旧内容');
   });
 
+  test('summary field roundtrips when present, stays absent otherwise', () => {
+    saveSession({ ...sample('带提要', 'x'), summary: '旧提要内容' });
+    expect(getSession('ses_test1')?.summary).toBe('旧提要内容');
+
+    saveSession({ ...sample('无提要', 'y'), id: 'ses_test2' });
+    expect(getSession('ses_test2')?.summary).toBeUndefined();
+  });
+
   test('list is ordered newest first', () => {
     const older = sample('旧对话', 'a');
     older.createdAt = Date.now() - 10_000;

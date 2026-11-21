@@ -20,6 +20,8 @@ export interface SessionRecord {
   cwd: string;
   model: string;
   messages: BaseMessage[];
+  /** Distilled digest of turns older than the kept compaction window. */
+  summary?: string;
 }
 
 interface StoredMessage {
