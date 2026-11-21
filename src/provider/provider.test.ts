@@ -13,6 +13,7 @@ import {
   vendorModelSpec,
   vendorModels,
   verifyModel,
+  switchNote,
 } from './provider.js';
 
 let configDir: string;
@@ -135,5 +136,18 @@ describe('verifyModel', () => {
     const result = await verifyModel('deepseek:deepseek-chat', '');
     expect(result.ok).toBe(false);
     expect(result.message).toMatch(/key/i);
+  });
+});
+
+describe('switchNote', () => {
+  test('plain switch line when the endpoint serves the picked name', () => {
+    expect(switchNote('glmc/glm-5.3', 'glm-5.3', 'glm-5.3')).toBe('已切换到 glmc/glm-5.3');
+    expect(switchNote('glmc/glm-5.3', 'glm-5.3', undefined)).toBe('已切换到 glmc/glm-5.3');
+  });
+
+  test('appends the effectively served model when it differs from the pick', () => {
+    expect(switchNote('glmc/glm-4.6', 'glm-4.6', 'glm-5.3-flash')).toBe(
+      '已切换到 glmc/glm-4.6（实际生效 glm-5.3-flash）',
+    );
   });
 });

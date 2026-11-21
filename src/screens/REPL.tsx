@@ -13,6 +13,7 @@ import {
   vendorModelSpec,
   vendorModels,
   verifyModel,
+  switchNote,
   type ModelId,
 } from '../provider/provider.js';
 import { loadConfig } from '../config.js';
@@ -50,6 +51,7 @@ type PromptPhase =
   | 'model_pick'
   | 'model_name'
   | 'custom_baseurl'
+  | 'vendor_apikey'
   | 'model_apikey'
   | 'model_check'
   | 'permission';
@@ -101,6 +103,8 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
   const [keyHint, setKeyHint] = useState<string | null>(null);
   const [customBaseDraft, setCustomBaseDraft] = useState('');
   const [customKeyDraft, setCustomKeyDraft] = useState('');
+  // Key typed at the vendor step (first-time setup) before any model pick.
+  const [vendorKeyDraft, setVendorKeyDraft] = useState('');
 
   const models = getAvailableModels();
   // Bun's scheduler can drop the render flush for updates issued from the
@@ -405,19 +409,21 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
   );
 
   const applyModelSwitch = useCallback(
-    (spec: string, displayName: string, apiKey: string, checkMessage: string) => {
+    (spec: string, displayName: string, apiKey: string, checkMessage: string, served?: string) => {
       registerApiKey(spec.split(':')[0]!, apiKey);
       ctx.setModelId(spec);
       setPreferredModel(spec);
+      const pickedModel = spec.split(':').pop() ?? displayName;
       addHistory({
         input: '••••••••',
-        output: `${checkMessage} — 已切换到 ${displayName}`,
+        output: `${checkMessage} — ${switchNote(displayName, pickedModel, served)}`,
       });
       setPendingSpec(null);
       setPendingDisplayName('');
       setKeyHint(null);
       setCustomBaseDraft('');
       setCustomKeyDraft('');
+      setVendorKeyDraft('');
       setVendor(null);
       setPhase('idle');
       dragFlush();
@@ -435,7 +441,7 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
       setPhase('model_check');
       const result = await verifyModel(spec, apiKey);
       if (result.ok) {
-        applyModelSwitch(spec, displayName, apiKey, `✓ ${result.message}`);
+        applyModelSwitch(spec, displayName, apiKey, `✓ ${result.message}`, result.served);
         return;
       }
       addHistory({
@@ -451,6 +457,35 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
 
   const handleApiKey = useCallback(
     async (value: string) => {
+      // Key-first vendor setup: the key unlocks the live model list before
+      // any model is picked (first-time use — no saved key yet).
+      if (phase === 'vendor_apikey') {
+        const apiKey = value.trim();
+        if (!apiKey) {
+          addHistory({ input: '••••••••', output: 'API key 不能为空。' });
+          return;
+        }
+        const vendor = pendingModel!;
+        setVendorKeyDraft(apiKey);
+        setPhase('model_pick');
+        setPickOptions(vendorModels(vendor));
+        setPickCursor(0);
+        setPickLive(false);
+        setPickLoading(true);
+        commitInput('');
+        const live = await listEndpointModels(vendor, { apiKey });
+        if (pendingModelRef.current === vendor) {
+          if (live.length > 0) {
+            setPickOptions(live);
+            setPickCursor(0);
+            setPickLive(true);
+          }
+          setPickLoading(false);
+        }
+        dragFlush();
+        return;
+      }
+
       // Custom-gateway setup: collect the key, then pick the model from the
       // gateway's live list instead of asking for a blind model name.
       if (pendingSpec === null && pendingModel === null && customBaseDraft) {
@@ -486,13 +521,14 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
       await finalizeSelection(spec, pendingDisplayName, apiKey);
     },
     [
+      phase,
       pendingSpec,
       pendingModel,
       pendingDisplayName,
       customBaseDraft,
       addHistory,
       finalizeSelection,
-      commitInput,
+     commitInput,
       dragFlush,
     ],
   );
@@ -503,7 +539,7 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
     const trimmed = resolveSubmitInput(phase, raw);
     if (trimmed === null) return;
 
-    if (phase === 'model_apikey' || phase === 'model_check') {
+    if (phase === 'vendor_apikey' || phase === 'model_apikey' || phase === 'model_check') {
       await handleApiKey(trimmed);
       commitInput('');
       return;
@@ -737,6 +773,14 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         setPickOptions(vendorModels(selected.id));
         setPickCursor(0);
         setPickLive(false);
+        setVendorKeyDraft('');
+        // Key-first: without a saved key the live /models call would 401,
+        // so ask for the key up front and fetch the real list with it.
+        if (!lookupApiKey(selected.id)) {
+          setPhase('vendor_apikey');
+          commitInput('');
+          return;
+        }
         setPhase('model_pick');
         commitInput('');
 
@@ -788,6 +832,14 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
           // Custom gateway: model chosen from the live list.
           setCustomModel({ baseUrl: customBaseDraft, model: modelName });
           void finalizeSelection('custom', `custom/${modelName}`, customKeyDraft);
+        } else if (vendorKeyDraft) {
+          // Key-first flow: the key was just typed — verify without
+          // re-asking for it (applyModelSwitch persists it on success).
+          void finalizeSelection(
+            vendorModelSpec(pendingModel!, modelName),
+            `${pendingModel}/${modelName}`,
+            vendorKeyDraft,
+          );
         } else {
           beginKeyStep(vendorModelSpec(pendingModel!, modelName), `${pendingModel}/${modelName}`);
         }
@@ -907,6 +959,8 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
           ? 'baseurl> '
           : phase === 'model_apikey'
             ? keyHint ? `apikey (回车沿用 ${keyHint})> ` : 'apikey> '
+            : phase === 'vendor_apikey'
+              ? 'apikey> '
             : phase === 'permission'
               ? 'allow?> '
               : '> ';
@@ -988,6 +1042,9 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
           </Box>
           {pickLoading && <Text color="gray" dimColor>… 正在从网关获取实时模型列表</Text>}
           {!pickLoading && pickLive && <Text color="gray" dimColor>（网关实时列表）</Text>}
+          {!pickLoading && !pickLive && (
+            <Text color="gray" dimColor>（本地列表 · 保存 key 后显示线上实时列表）</Text>
+          )}
           <Text color="gray" dimColor>↑↓ 选择模型 · Enter 确认</Text>
         </Box>
       )}

@@ -31,7 +31,7 @@ function stubModelsEndpoint(ids: string[]): string {
 }
 
 describe('listEndpointModels', () => {
-  test('fetches the live model list from the endpoint', async () => {
+  test('fetches the live model list from the endpoint, newest generation first', async () => {
     const baseUrl = stubModelsEndpoint(['glm-5.1', 'glm-4.6', 'glm-5.3-flash']);
     const { saveConfig } = await import('../config.js');
     saveConfig({
@@ -40,13 +40,41 @@ describe('listEndpointModels', () => {
     });
 
     const models = await listEndpointModels('myhub');
-    expect(models).toEqual(['glm-4.6', 'glm-5.1', 'glm-5.3-flash']); // sorted
+    expect(models).toEqual(['glm-5.3-flash', 'glm-5.1', 'glm-4.6']); // newest first
+  });
+
+  test('orders newest generation first: base name before variants, variants before older lines', async () => {
+    const baseUrl = stubModelsEndpoint([
+      'glm-4.5-air',
+      'glm-5.3-flashx-legal',
+      'glm-4.6',
+      'glm-5.3',
+      'glm-5.3-flashx',
+      'glm-5.3-flash',
+      'glm-5-turbo',
+    ]);
+    const { saveConfig } = await import('../config.js');
+    saveConfig({
+      apiKeys: { custom: 'k' },
+      profiles: { gen: { baseUrl, model: 'glm-4.6', keyId: 'custom' } },
+    });
+
+    const models = await listEndpointModels('gen');
+    expect(models).toEqual([
+      'glm-5.3',
+      'glm-5.3-flash',
+      'glm-5.3-flashx',
+      'glm-5.3-flashx-legal',
+      'glm-5-turbo',
+      'glm-4.6',
+      'glm-4.5-air',
+    ]);
   });
 
   test('override form queries an unsaved custom gateway with its key', async () => {
     const baseUrl = stubModelsEndpoint(['m1', 'm2']);
     const models = await listEndpointModels('', { baseUrl, apiKey: 'k' });
-    expect(models).toEqual(['m1', 'm2']);
+    expect(models).toEqual(['m2', 'm1']); // newest-first heuristic: m2 > m1
   });
 
   test('returns an empty list on failure so callers can fall back', async () => {

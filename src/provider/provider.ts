@@ -462,7 +462,7 @@ function buildChatModel(
 export async function verifyModel(
   spec: string,
   apiKeyOverride?: string,
-): Promise<{ ok: boolean; message: string }> {
+): Promise<{ ok: boolean; message: string; served?: string }> {
   const resolved = resolveModel(spec);
   const apiKey = apiKeyOverride?.trim() || lookupApiKey(resolved.id);
   if (!apiKey) {
@@ -481,12 +481,25 @@ export async function verifyModel(
     const served = response?.response_metadata?.model_name;
     return {
       ok: true,
+      served,
       message: `连通正常${served ? `（实际模型 ${served}）` : ''}`,
     };
   } catch (error) {
     const raw = (error as Error).message ?? String(error);
     return { ok: false, message: raw.length > 300 ? `${raw.slice(0, 300)}…` : raw };
   }
+}
+
+/**
+ * Switch-line copy for applyModelSwitch: appends the effectively served
+ * model when the gateway maps the picked name onto a different one
+ * (e.g. glm-4.6 → glm-5.3-flash).
+ */
+export function switchNote(displayName: string, pickedModel: string, served?: string): string {
+  if (served && served !== pickedModel) {
+    return `已切换到 ${displayName}（实际生效 ${served}）`;
+  }
+  return `已切换到 ${displayName}`;
 }
 
 /** @deprecated Use createModel instead. Kept for the existing REPL. */
@@ -582,6 +595,25 @@ export function getRouting(): Record<string, string> {
 }
 
 /**
+ * Newest-generation-first ordering for a live model list: numeric runs
+ * compare pairwise, descending ('glm-5.3' > 'glm-4.6' > 'glm-4.5-air');
+ * on a version tie the shorter base name leads ('glm-5.3' before
+ * 'glm-5.3-flashx'), then alphabetical.
+ */
+function newestFirst(a: string, b: string): number {
+  const digits = (s: string): number[] => (s.match(/\d+/g) ?? []).map(Number);
+  const na = digits(a);
+  const nb = digits(b);
+  for (let i = 0; i < Math.max(na.length, nb.length); i++) {
+    const da = na[i] ?? -1;
+    const db = nb[i] ?? -1;
+    if (da !== db) return db - da;
+  }
+  if (a.length !== b.length) return a.length - b.length;
+  return a.localeCompare(b);
+}
+
+/**
  * Live model list from an endpoint's OpenAI-compatible GET /models, so the
  * /models picker shows what the gateway actually serves (Zhipu's coding
  * endpoint, for one, maps old names to newer generations). Empty list on
@@ -590,7 +622,7 @@ export function getRouting(): Record<string, string> {
  */
 export async function listEndpointModels(
   specOrId: string,
-  override?: { baseUrl: string; apiKey?: string },
+  override?: { baseUrl?: string; apiKey?: string },
 ): Promise<string[]> {
   try {
     const baseUrl = (override?.baseUrl ?? baseUrlFor(resolveModel(specOrId)))?.replace(/\/$/, '');
@@ -609,7 +641,7 @@ export async function listEndpointModels(
     const ids = (body.data ?? [])
       .map((entry) => entry?.id)
       .filter((id): id is string => typeof id === 'string' && id.length > 0);
-    return [...new Set(ids)].sort();
+    return [...new Set(ids)].sort(newestFirst);
   } catch {
     return [];
   }
