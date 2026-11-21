@@ -29,6 +29,7 @@ import {
   type SessionRecord,
 } from '../sessions/store.js';
 import { listProjectSessions, resolveResumeTarget } from '../sessions/resume.js';
+import { KEEP_TURNS, compressSession, renderTranscript, splitTurns } from '../sessions/compact.js';
 import { walkFiles } from '../agent/tools/fs-utils.js';
 import { applyCompletion, filterFiles, mentionQuery } from './file-completion.js';
 import {
@@ -137,6 +138,8 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
   // Conversation persistence: lazily created record + model-generated title.
   const conversationRef = useRef<{ id: string; createdAt: number; titled: boolean } | null>(null);
   const conversationTitleRef = useRef('');
+  // Compaction digest of turns older than the kept window (from resume//compact).
+  const summaryRef = useRef<string | null>(null);
   const lastSessionsRef = useRef<string[]>([]);
   // Snapshot for the /resume arrow-key picker (set together with the phase).
   const sessionPickerRef = useRef<SessionRecord[]>([]);
@@ -145,6 +148,7 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
     (record: SessionRecord, inputLine: string) => {
       conversationRef.current = { id: record.id, createdAt: record.createdAt, titled: true };
       conversationTitleRef.current = record.title;
+      summaryRef.current = record.summary ?? null;
       messagesRef.current = record.messages;
       toolSessionRef.current = createToolSession(process.cwd());
       addHistory({
@@ -232,6 +236,38 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
     setBusy(v);
   }, []);
 
+  /** Shared resume flow: auto-compact over-long sessions, then load + render. */
+  const resumeWith = async (record: SessionRecord, inputLine: string) => {
+    const { turns } = splitTurns(record.messages);
+    let finalRecord = record;
+    let oldTurns = 0;
+    if (turns.length > KEEP_TURNS) {
+      setBusyBoth(true);
+      try {
+        if (process.env.TRANSCODE_MOCK !== '1') {
+          const outcome = await compressSession(record, createModel(ctx.modelId).model);
+          if (outcome.compressed) {
+            finalRecord = outcome.record;
+            oldTurns = turns.length - KEEP_TURNS;
+            saveSession(finalRecord);
+          } else {
+            addHistory({ input: '', output: `⚠ 提炼失败(${outcome.error ?? '未知'}),已恢复完整对话。` });
+          }
+        }
+      } catch {
+        addHistory({ input: '', output: '⚠ 提炼失败,已恢复完整对话。' });
+      } finally {
+        setBusyBoth(false);
+      }
+    }
+    applyResume(finalRecord, inputLine);
+    addHistory({
+      input: inputLine,
+      output: renderTranscript(summaryRef.current, messagesRef.current, oldTurns || undefined),
+    });
+    dragFlush();
+  };
+
   const appendChatOutput = useCallback((chunk: string) => {
     setHistory(prev => {
       if (prev.length === 0) return prev;
@@ -297,10 +333,21 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         const titlesById = new Map<string, string>();
         const bufferedLines: string[] = [];
         let pendingCalls = 0;
+        // The digest rides in as a transient system message after the leading
+        // system prompt — passed as a copy and stripped from the result so it
+        // never lands in messagesRef or the persisted session.
+        let loopMessages = messagesRef.current;
+        if (summaryRef.current) {
+          const copy = [...messagesRef.current];
+          let insertAt = 0;
+          while (insertAt < copy.length && copy[insertAt]!.getType() === 'system') insertAt++;
+          copy.splice(insertAt, 0, new SystemMessage(`【前情提要】\n${summaryRef.current}`));
+          loopMessages = copy;
+        }
         const result = await runAgentLoop({
           model: provider?.model,
           cwd: process.cwd(),
-          messages: messagesRef.current,
+          messages: loopMessages,
           systemPrompt: options?.planMode
             ? `${systemPrompt}\n\nPLAN MODE: explore read-only, then output a numbered implementation plan with exact files and changes. End with the line PLAN READY. Do not modify anything.`
             : systemPrompt,
@@ -352,7 +399,14 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
           for (const line of bufferedLines) appendChatOutput(line);
         }
 
-        messagesRef.current = result.messages;
+        messagesRef.current = result.messages.filter(
+          (message) =>
+            !(
+              message.getType() === 'system' &&
+              typeof message.content === 'string' &&
+              message.content.startsWith('【前情提要】')
+            ),
+        );
 
         // Persist the conversation for /sessions and /resume.
         if (!conversationRef.current) {
@@ -610,6 +664,7 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
     if (cmdName === 'new') {
       conversationRef.current = null;
       conversationTitleRef.current = '';
+      summaryRef.current = null;
       messagesRef.current = [];
       toolSessionRef.current = createToolSession(process.cwd());
       addHistory({ input: trimmed, output: '已开始新对话。' });
@@ -664,13 +719,68 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         if (!record) {
           addHistory({ input: trimmed, output: `未找到对话“${target}”。先 /sessions 查看列表。` });
         } else {
-          applyResume(record, trimmed);
+          await resumeWith(record, trimmed);
         }
       }
       commitInput('');
       setHistoryIndex(-1);
       setSavedInput('');
       dragFlush();
+      return;
+    }
+
+    if (cmdName === 'compact') {
+      const finishCompact = () => {
+        commitInput('');
+        setHistoryIndex(-1);
+        setSavedInput('');
+        dragFlush();
+      };
+      if (!conversationRef.current) {
+        addHistory({ input: trimmed, output: '当前没有进行中的会话,先聊几句或 /resume 恢复一个。' });
+        finishCompact();
+        return;
+      }
+      const { turns } = splitTurns(messagesRef.current);
+      if (turns.length <= KEEP_TURNS) {
+        addHistory({ input: trimmed, output: `无需压缩:当前 ${turns.length} 轮 ≤ ${KEEP_TURNS}。` });
+        finishCompact();
+        return;
+      }
+      setBusyBoth(true);
+      try {
+        const record: SessionRecord = {
+          id: conversationRef.current.id,
+          title: conversationTitleRef.current,
+          createdAt: conversationRef.current.createdAt,
+          updatedAt: Date.now(),
+          cwd: process.cwd(),
+          model: ctx.modelId,
+          messages: messagesRef.current,
+          ...(summaryRef.current ? { summary: summaryRef.current } : {}),
+        };
+        const outcome = process.env.TRANSCODE_MOCK === '1'
+          ? { compressed: false as const, record, error: 'mock 模式无模型' }
+          : await compressSession(record, createModel(ctx.modelId).model);
+        if (outcome.compressed) {
+          summaryRef.current = outcome.record.summary ?? null;
+          messagesRef.current = outcome.record.messages;
+          saveSession(outcome.record);
+          addHistory({
+            input: trimmed,
+            output:
+              `已压缩:旧 ${turns.length - KEEP_TURNS} 轮提炼为前情提要,保留最近 ${KEEP_TURNS} 轮。\n` +
+              renderTranscript(summaryRef.current, messagesRef.current),
+          });
+        } else {
+          addHistory({ input: trimmed, output: `⚠ 压缩失败(${outcome.error ?? '未知'}),会话保持原样。` });
+        }
+      } catch {
+        addHistory({ input: trimmed, output: '⚠ 压缩失败,会话保持原样。' });
+      } finally {
+        setBusyBoth(false);
+      }
+      finishCompact();
       return;
     }
 
@@ -846,9 +956,7 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         const record = picker[sessionCursor];
         if (record) {
           setPhase('idle');
-          applyResume(record, '/resume');
-          // Stdin-path terminal action: nudge the render flush (Bun quirk).
-          dragFlush();
+          void resumeWith(record, '/resume');
         }
         return;
       }

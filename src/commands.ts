@@ -89,6 +89,12 @@ const commands: Command[] = [
     execute: () => ({ output: 'Resuming…' }),
   },
   {
+    name: 'compact',
+    description: '压缩当前会话:旧轮提炼为前情提要,保留最近 10 轮',
+    // Intercepted by the REPL.
+    execute: () => ({ output: 'Compacting…' }),
+  },
+  {
     name: 'route',
     description: 'Show or set role→model routing (analysis/design/vision/…)',
     execute: (args) => {
