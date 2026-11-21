@@ -17,7 +17,7 @@ import {
   switchNote,
   type ModelId,
 } from '../provider/provider.js';
-import { loadConfig } from '../config.js';
+import { loadConfig, normalizeAutoCompact } from '../config.js';
 import { runAgentLoop, type PermissionRequest } from '../agent/loop.js';
 import { createToolSession } from '../agent/tools/index.js';
 import { getPermissionMode } from '../agent/permission.js';
@@ -31,7 +31,7 @@ import {
   type SessionRecord,
 } from '../sessions/store.js';
 import { listProjectSessions, resolveResumeTarget, splitResumeArgs } from '../sessions/resume.js';
-import { DEFAULT_KEEP_TURNS, compressSession, parseKeepCount, transcriptEntries, splitTurns } from '../sessions/compact.js';
+import { DEFAULT_KEEP_TURNS, compressSession, estimateTokens, parseKeepCount, transcriptEntries, splitTurns } from '../sessions/compact.js';
 import { walkFiles } from '../agent/tools/fs-utils.js';
 import { applyCompletion, filterFiles, mentionQuery } from './file-completion.js';
 import {
@@ -330,11 +330,61 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
     [],
   );
 
+  // Auto-compact (Claude Code style proactive): threshold check before each
+  // turn, same runCompaction as /compact and resume. Circuit breaker stops
+  // after 3 consecutive failures; auto failures warn once per session.
+  const autoCompactFailuresRef = useRef(0);
+  const autoCompactWarnedRef = useRef(false);
+  const autoCompactIfNeeded = async (): Promise<void> => {
+    const cfg = normalizeAutoCompact(loadConfig().autoCompact);
+    if (!cfg.enabled || !conversationRef.current) return;
+    if (process.env.TRANSCODE_MOCK === '1') return;
+    if (autoCompactFailuresRef.current >= 3) return;
+    if (estimateTokens(messagesRef.current) < cfg.thresholdChars) return;
+    try {
+      // Dedicated host entry before the question echo, so the digest neither
+      // mixes into the turn entry nor receives the turn's streamed reply.
+      addHistory({ input: '', output: '' });
+      const record = buildSessionRecord({
+        id: conversationRef.current.id,
+        title: conversationTitleRef.current,
+        createdAt: conversationRef.current.createdAt,
+        cwd: process.cwd(),
+        model: ctx.modelId,
+        messages: messagesRef.current,
+        summary: summaryRef.current,
+      });
+      const outcome = await runCompaction(record, DEFAULT_KEEP_TURNS);
+      if (!outcome.compressed) throw new Error(outcome.error ?? '未知');
+      summaryRef.current = outcome.record.summary ?? null;
+      messagesRef.current = outcome.record.messages;
+      saveSession(outcome.record);
+      autoCompactFailuresRef.current = 0;
+      autoCompactWarnedRef.current = false;
+      for (const entry of transcriptEntries(summaryRef.current, messagesRef.current)) {
+        addHistory(entry);
+      }
+    } catch (error) {
+      autoCompactFailuresRef.current += 1;
+      const reason = error instanceof Error ? error.message : String(error);
+      if (autoCompactFailuresRef.current >= 3) {
+        addHistory({
+          input: '',
+          output: `⚠ 自动压缩已暂停(连续 3 次失败,最后原因:${reason})。可 /compact 手动压缩或检查 routing.compact 配置。`,
+        });
+      } else if (!autoCompactWarnedRef.current) {
+        autoCompactWarnedRef.current = true;
+        addHistory({ input: '', output: `⚠ 自动压缩失败(${reason}),本轮继续。` });
+      }
+    }
+  };
+
   const runChat = useCallback(
     async (text: string, display?: string, options?: { planMode?: boolean }) => {
       setBusyBoth(true);
       const controller = new AbortController();
       abortRef.current = controller;
+      await autoCompactIfNeeded();
       addHistory({ input: display ?? text, output: '' });
       if (options?.planMode) {
         appendChatOutput('［plan 模式：只读探索，产出方案，PLAN READY 后可让我执行］\n');
