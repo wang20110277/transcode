@@ -44,9 +44,9 @@ const MODEL_REGISTRY: Record<ModelId, ModelConfig> = {
     envKey: 'DEEPSEEK_API_KEY',
   },
   glm: {
-    name: 'GLM-4',
+    name: 'GLM',
     provider: 'openai',
-    model: 'glm-4',
+    model: 'glm-5.3',
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     envKey: 'GLM_API_KEY',
   },
@@ -56,7 +56,7 @@ const MODEL_REGISTRY: Record<ModelId, ModelConfig> = {
     // The GLM Coding Plan subscription only bills against the dedicated
     // coding endpoint; the standard /api/paas/v4 endpoint answers 429
     // "余额不足或无可用资源包" because the plan is not applied there.
-    model: 'glm-4.6',
+    model: 'glm-5.3',
     baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
     envKey: 'GLM_API_KEY',
   },
@@ -88,8 +88,8 @@ const VENDOR_MODELS: Partial<Record<ModelId, string[]>> = {
   opus: ['claude-opus-4-20250514', 'claude-sonnet-4-20250514'],
   gpt: ['gpt-4o', 'gpt-4o-mini'],
   deepseek: ['deepseek-v4-pro', 'deepseek-flash'],
-  glm: ['glm-4.6', 'glm-4.5', 'glm-4.5-air', 'glm-4-flash'],
-  glmc: ['glm-4.6', 'glm-4.5'],
+  glm: ['glm-5.3', 'glm-5.3-flash', 'glm-5.2', 'glm-5.1', 'glm-4.6', 'glm-4.5', 'glm-4.5-air'],
+  glmc: ['glm-5.3', 'glm-5.3-flash', 'glm-5.2', 'glm-4.6', 'glm-4.5'],
   minimax: ['MiniMax-Text-01'],
   kimi: ['moonshot-v1-128k', 'moonshot-v1-8k'],
 };

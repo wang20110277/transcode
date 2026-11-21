@@ -45,7 +45,7 @@ describe('GLM Coding Plan preset', () => {
     registerApiKey('glmc', 'test-key');
     const provider = createModel('glmc');
     expect(provider.config.baseUrl).toContain('/api/coding/');
-    expect(provider.config.model).toBe('glm-4.6');
+    expect(provider.config.model).toBe('glm-5.3');
   });
 
   test('appears in the model list for /models', () => {
@@ -64,8 +64,24 @@ describe('vendor model lists', () => {
 
   test('glm lists the current model line', () => {
     const glm = vendorModels('glm');
+    // The glm-5.x generation is what the endpoints actually serve now;
+    // glm-4.6/4.5 live on as server-side aliases. glm-4-flash is retired.
+    expect(glm).toContain('glm-5.3');
+    expect(glm).toContain('glm-5.3-flash');
     expect(glm).toContain('glm-4.6');
-    expect(glm).toContain('glm-4.5');
+    expect(glm).not.toContain('glm-4-flash');
+  });
+
+  test('glmc lists the current model line of the coding endpoint', () => {
+    const glmc = vendorModels('glmc');
+    expect(glmc).toContain('glm-5.3');
+    expect(glmc).toContain('glm-5.3-flash');
+    expect(glmc).toContain('glm-4.6');
+  });
+
+  test('registry defaults resolve to models the endpoints actually serve', () => {
+    expect(resolveModel('glm').model).toBe('glm-5.3');
+    expect(resolveModel('glmc').model).toBe('glm-5.3');
   });
 
   test('deepseek lists the current model line', () => {

@@ -91,7 +91,7 @@ describe('role routing', () => {
   test('resolveRole maps a role through to the profile model', () => {
     setRouting('analysis', 'glmc');
     const resolved = resolveRole('analysis');
-    expect(resolved?.model).toBe('glm-4.6');
+    expect(resolved?.model).toBe('glm-5.3');
     expect(resolved?.baseUrl).toContain('/api/coding/');
   });
 
