@@ -140,7 +140,12 @@ export function startAutoUpdate(): void {
         intervalHours,
         envSkip,
       });
-      if (plan.action === 'skip') return null;
+      if (plan.action === 'skip') {
+        // Up-to-date is a definitive outcome — record it so the next
+        // startup is throttled. Unknown-latest stays unwritten to retry.
+        if (plan.reason === 'up-to-date') writeLastCheck();
+        return null;
+      }
 
       const install = await shQuiet('npm', ['i', '-g', plan.spec, `--registry=${OFFICIAL}`]);
       if (install.code !== 0) {
