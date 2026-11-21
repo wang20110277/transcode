@@ -1,2 +1,2 @@
 // Auto-generated from package.json by scripts/sync-version.ts (npm version hook)
-export const VERSION = '0.5.0';
+export const VERSION = '0.6.0';
