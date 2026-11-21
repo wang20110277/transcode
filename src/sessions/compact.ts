@@ -7,9 +7,12 @@ export const DEFAULT_KEEP_TURNS = 1;
 /** Cap on the transcript fed to the distilling model (protects its context). */
 export const TRANSCRIPT_LIMIT = 40_000;
 
-/** Minimal model surface needed for distillation (mock-friendly). */
+/** Cap on the distilled summary: stop consuming the stream past this. */
+export const COMPACT_MAX_SUMMARY_CHARS = 1200;
+
+/** Minimal streaming model surface needed for distillation (mock-friendly). */
 export interface CompactModel {
-  invoke(input: string): Promise<{ content: unknown }>;
+  stream(input: string): AsyncIterable<{ content: unknown }>;
 }
 
 /**
@@ -68,10 +71,6 @@ function buildPrompt(previousSummary: string | undefined, oldTurns: BaseMessage[
   return `${head}${prior}\n对话历史:\n${renderTranscriptText(oldTurns)}`;
 }
 
-function replyText(content: unknown): string {
-  return (typeof content === 'string' ? content : JSON.stringify(content)).trim();
-}
-
 /**
  * Validate a raw keep-turns argument: undefined → default (no opinion),
  * pure digits ≥1 → {keep}, anything else → {error} so callers can show a
@@ -93,19 +92,25 @@ export async function compressSession(
   record: SessionRecord,
   model: CompactModel,
   keepTurns = DEFAULT_KEEP_TURNS,
+  onDelta?: (delta: string) => void,
 ): Promise<{ compressed: boolean; record: SessionRecord; error?: string }> {
   const window = Math.max(1, keepTurns);
   const { leading, turns } = splitTurns(record.messages);
   if (turns.length <= window) return { compressed: false, record };
   const keep = turns.slice(-window);
   const old = turns.slice(0, turns.length - window);
-  let summary: string;
+  let raw = '';
   try {
-    const response = await model.invoke(buildPrompt(record.summary, old));
-    summary = replyText(response.content);
+    for await (const chunk of model.stream(buildPrompt(record.summary, old))) {
+      const text = typeof chunk.content === 'string' ? chunk.content : '';
+      if (text) onDelta?.(text);
+      raw += text;
+      if (raw.length >= COMPACT_MAX_SUMMARY_CHARS) break;
+    }
   } catch (error) {
     return { compressed: false, record, error: error instanceof Error ? error.message : String(error) };
   }
+  const summary = raw.slice(0, COMPACT_MAX_SUMMARY_CHARS).trim();
   if (!summary) return { compressed: false, record, error: '模型返回了空前情提要' };
   return {
     compressed: true,

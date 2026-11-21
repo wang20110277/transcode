@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages';
 import type { SessionRecord } from './store.js';
 import {
+  COMPACT_MAX_SUMMARY_CHARS,
   DEFAULT_KEEP_TURNS,
   TRANSCRIPT_LIMIT,
   compressSession,
@@ -31,13 +32,21 @@ function recordWith(turns: number, opts: { summary?: string; longTurn?: boolean 
   };
 }
 
-function mockModel(text: string): { invoke: (input: string) => Promise<{ content: string }>; prompts: string[] } {
+/** Streaming mock: yields chunks; can throw at chunk N and track pulls. */
+function streamModel(
+  chunks: string[],
+  opts: { throwAt?: number; trackPulled?: string[] } = {},
+): { stream: (input: string) => AsyncGenerator<{ content: string }>; prompts: string[] } {
   const prompts: string[] = [];
   return {
     prompts,
-    invoke: async (input: string) => {
+    stream: async function* (input: string) {
       prompts.push(input);
-      return { content: text };
+      for (let i = 0; i < chunks.length; i++) {
+        opts.trackPulled?.push(chunks[i]!);
+        if (opts.throwAt === i + 1) throw new Error('stream blew up');
+        yield { content: chunks[i]! };
+      }
     },
   };
 }
@@ -62,60 +71,87 @@ describe('splitTurns', () => {
 });
 
 describe('compressSession', () => {
+  test('streams chunks into the summary and forwards each delta', async () => {
+    const deltas: string[] = [];
+    const { compressed, record } = await compressSession(
+      recordWith(3),
+      streamModel(['前情', '提要']),
+      1,
+      (d) => deltas.push(d),
+    );
+    expect(compressed).toBe(true);
+    expect(record.summary).toBe('前情提要');
+    expect(deltas).toEqual(['前情', '提要']);
+  });
+
+  test('caps summary at COMPACT_MAX_SUMMARY_CHARS and stops consuming early', async () => {
+    const pulled: string[] = [];
+    const model = streamModel(['x'.repeat(1000), 'y'.repeat(1000), 'z'.repeat(1000)], { trackPulled: pulled });
+    const { record } = await compressSession(recordWith(3), model, 1);
+    expect(record.summary!.length).toBeLessThanOrEqual(COMPACT_MAX_SUMMARY_CHARS);
+    expect(pulled.length).toBe(2); // 第三块未消费
+  });
+
+  test('mid-stream error falls back with error set', async () => {
+    const rec = recordWith(3);
+    const { compressed, record, error } = await compressSession(rec, streamModel(['前情', '提要'], { throwAt: 2 }), 1);
+    expect(compressed).toBe(false);
+    expect(error).toBeDefined();
+    expect(record).toBe(rec);
+  });
+
+  test('non-string chunk content is skipped', async () => {
+    const model = {
+      stream: async function* () {
+        yield { content: '前情' };
+        yield { content: [{ text: 'x' }] };
+        yield { content: '提要' };
+      },
+    };
+    const { record } = await compressSession(recordWith(3), model as never, 1);
+    expect(record.summary).toBe('前情提要');
+  });
+
   test('default keeps only 1 turn', async () => {
-    const { compressed, record } = await compressSession(recordWith(3), mockModel('提要内容'));
+    const { compressed, record } = await compressSession(recordWith(3), streamModel(['提要内容']));
     expect(compressed).toBe(true);
     expect(record.summary).toBe('提要内容');
-    expect(splitTurns(record.messages).turns.length).toBe(DEFAULT_KEEP_TURNS);
     expect(splitTurns(record.messages).turns.length).toBe(1);
     expect(record.messages[0]!.getType()).toBe('system');
     expect(record.updatedAt).toBeGreaterThan(1);
   });
 
   test('explicit keepTurns=10 keeps 10', async () => {
-    const { record } = await compressSession(recordWith(12), mockModel('提要'), 10);
+    const { record } = await compressSession(recordWith(12), streamModel(['提要']), 10);
     expect(splitTurns(record.messages).turns.length).toBe(10);
   });
 
   test('keepTurns below 1 clamps to 1', async () => {
-    const { record } = await compressSession(recordWith(3), mockModel('提要'), 0);
+    const { record } = await compressSession(recordWith(3), streamModel(['提要']), 0);
     expect(splitTurns(record.messages).turns.length).toBe(1);
   });
 
   test('at or below keepTurns is a no-op returning the original record', async () => {
     const rec = recordWith(10);
-    const { compressed, record } = await compressSession(rec, mockModel('x'), 10);
+    const { compressed, record } = await compressSession(rec, streamModel(['x']), 10);
     expect(compressed).toBe(false);
     expect(record).toBe(rec);
   });
 
-  test('model failure returns original record with error', async () => {
-    const rec = recordWith(12);
-    const failing = {
-      invoke: async () => {
-        throw new Error('API down');
-      },
-    };
-    const { compressed, record, error } = await compressSession(rec, failing, 10);
-    expect(compressed).toBe(false);
-    expect(error).toBeDefined();
-    expect(record).toBe(rec);
-  });
-
-  test('empty model reply is treated as failure', async () => {
-    const { compressed, error } = await compressSession(recordWith(12), mockModel('   '), 10);
+  test('empty summary is treated as failure', async () => {
+    const { compressed, error } = await compressSession(recordWith(12), streamModel(['   ']), 10);
     expect(compressed).toBe(false);
     expect(error).toBeDefined();
   });
 
   test('rolling merge: previous summary appears in the prompt', async () => {
-    const model = mockModel('新提要');
+    const model = streamModel(['新提要']);
     await compressSession(recordWith(12, { summary: '旧提要内容' }), model, 10);
     expect(model.prompts[0]).toContain('旧提要内容');
   });
 
   test('huge old transcript is truncated before invoking the model', async () => {
-    const model = mockModel('提要');
+    const model = streamModel(['提要']);
     await compressSession(recordWith(12, { longTurn: true }), model, 10);
     expect(model.prompts[0]!.length).toBeLessThan(TRANSCRIPT_LIMIT + 2_000);
     expect(model.prompts[0]).toContain('更早内容已截断');
