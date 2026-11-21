@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { loadConfig, normalizeAutoUpdate, saveConfig } from './config.js';
 import { VERSION } from './version.js';
 
 const PKG = '@trans-ai/trans-code';
@@ -50,6 +51,121 @@ export function planAutoUpdate(input: {
   // Pinned target: stay at it exactly, downgrades included.
   if (input.target === input.current) return { action: 'skip', reason: 'up-to-date' };
   return { action: 'install', spec: `${PKG}@${input.target}`, from: input.current, to: input.target };
+}
+
+/**
+ * True when the running entry file lives outside the npm global root
+ * (repo checkout, bun link) — nothing to auto-upgrade there. Both sides
+ * are realpath-normalized so macOS aliases (/tmp vs /private/tmp) and
+ * symlinked roots compare correctly.
+ */
+export function isDevInstall(entryPath: string, npmRoot: string): boolean {
+  if (!npmRoot) return true;
+  try {
+    const entryReal = realpathSync(entryPath);
+    const rootReal = realpathSync(npmRoot);
+    return !entryReal.startsWith(rootReal);
+  } catch {
+    return true;
+  }
+}
+
+/** Like sh(), but fully silent — background installs must not spew into the TUI. */
+function shQuiet(cmd: string, args: string[]): Promise<{ code: number; stdout: string }> {
+  return new Promise(resolve => {
+    const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    child.stdout.on('data', (d: Buffer) => {
+      stdout += d.toString();
+    });
+    child.on('error', () => resolve({ code: 1, stdout }));
+    child.on('close', code => resolve({ code: code ?? 1, stdout }));
+  });
+}
+
+let noticePromise: Promise<string | null> = Promise.resolve(null);
+
+/** The auto-update outcome, once settled; null when nothing happened. */
+export function autoUpdateNotice(): Promise<string | null> {
+  return noticePromise;
+}
+
+/**
+ * Kick off the background auto-update (REPL startup only). Never throws
+ * and never blocks: every failure path settles the notice to null, and
+ * npm output stays invisible unless TRANSCODE_DEBUG_UPGRADE=1.
+ *
+ * lastCheck is written only when the check reached a definitive state
+ * (up-to-date, or install succeeded) — on failure the next startup retries.
+ */
+export function startAutoUpdate(): void {
+  noticePromise = (async (): Promise<string | null> => {
+    const debug = process.env.TRANSCODE_DEBUG_UPGRADE === '1';
+    try {
+      const auto = normalizeAutoUpdate(loadConfig().autoUpdate);
+      const envSkip = process.env.TRANSCODE_SKIP_UPDATE === '1';
+      const intervalHours = Number(process.env.TRANSCODE_UPDATE_INTERVAL_HOURS) || undefined;
+
+      // Cheap gates first — no subprocess before we know we might install.
+      const early = planAutoUpdate({
+        current: VERSION,
+        latest: 'x', // placeholder: gates below never read it
+        target: auto.target,
+        enabled: auto.enabled,
+        lastCheck: auto.lastCheck,
+        now: Date.now(),
+        intervalHours,
+        envSkip,
+      });
+      if (early.action === 'skip' && early.reason !== 'unknown-latest') {
+        if (early.reason === 'up-to-date' && auto.target !== 'latest') return null; // pin satisfied
+        return null;
+      }
+
+      const root = (await shQuiet('npm', ['root', '-g'])).stdout.trim();
+      const entry = realpathSync(fileURLToPath(import.meta.url));
+      if (isDevInstall(entry, root)) {
+        if (debug) process.stderr.write('[transcode] auto-update: dev install, skipped\n');
+        return null;
+      }
+
+      const latest = auto.target === 'latest' ? await latestVersion() : auto.target;
+      const plan = planAutoUpdate({
+        current: VERSION,
+        latest,
+        target: auto.target,
+        enabled: auto.enabled,
+        lastCheck: auto.lastCheck,
+        now: Date.now(),
+        intervalHours,
+        envSkip,
+      });
+      if (plan.action === 'skip') return null;
+
+      const install = await shQuiet('npm', ['i', '-g', plan.spec, `--registry=${OFFICIAL}`]);
+      if (install.code !== 0) {
+        if (debug) process.stderr.write('[transcode] auto-update install failed\n');
+        return null;
+      }
+      const installed = installedVersionUnder(root);
+      writeLastCheck();
+      return `⟳ 已自动更新 ${VERSION} → ${installed ?? plan.to}，重启 transcode 生效`;
+    } catch (error) {
+      if (debug) process.stderr.write(`[transcode] auto-update error: ${String(error)}\n`);
+      return null;
+    }
+  })();
+}
+
+function writeLastCheck(): void {
+  try {
+    const cfg = loadConfig();
+    const auto = normalizeAutoUpdate(cfg.autoUpdate);
+    cfg.autoUpdate = { ...auto, lastCheck: Date.now() };
+    saveConfig(cfg);
+  } catch {
+    // The throttle cache is best-effort.
+  }
 }
 
 function sh(cmd: string, args: string[]): Promise<{ code: number; stdout: string }> {
@@ -104,14 +220,11 @@ export async function runUpgrade(): Promise<void> {
 
   const entry = realpathSync(fileURLToPath(import.meta.url));
   const root = await npmRoot();
-  // Normalize both sides through realpath — macOS aliases like /tmp vs
-  // /private/tmp would otherwise break prefix comparison.
-  const rootReal = root ? realpathSync(root) : '';
   if (process.env.TRANSCODE_DEBUG_UPGRADE === '1') {
-    process.stdout.write(`[debug] entry=${entry}\n[debug] root=${rootReal}\n`);
+    process.stdout.write(`[debug] entry=${entry}\n[debug] root=${root}\n`);
   }
 
-  if (!rootReal || !entry.startsWith(rootReal)) {
+  if (isDevInstall(entry, root)) {
     process.stdout.write(
       [
         'This looks like a development install (bun link / repo checkout),',

@@ -1,5 +1,73 @@
-import { describe, expect, test } from 'bun:test';
-import { planAutoUpdate } from './upgrade.js';
+import { afterEach, describe, expect, test } from 'bun:test';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import {
+  autoUpdateNotice,
+  isDevInstall,
+  planAutoUpdate,
+  startAutoUpdate,
+} from './upgrade.js';
+
+let configDir: string | undefined;
+
+function useTempConfig(raw: unknown): void {
+  configDir = mkdtempSync(path.join(tmpdir(), 'transcode-autoupdate-test-'));
+  process.env.TRANSCODE_CONFIG_PATH = path.join(configDir, 'config.json');
+  writeFileSync(process.env.TRANSCODE_CONFIG_PATH, JSON.stringify({ autoUpdate: raw }));
+}
+
+afterEach(() => {
+  delete process.env.TRANSCODE_CONFIG_PATH;
+  if (configDir) {
+    rmSync(configDir, { recursive: true, force: true });
+    configDir = undefined;
+  }
+});
+
+describe('isDevInstall', () => {
+  test('an entry under the npm root is a global install', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'transcode-root-test-'));
+    try {
+      mkdirSync(path.join(root, '@trans-ai'));
+      const entry = path.join(root, '@trans-ai', 'trans-code.ts');
+      writeFileSync(entry, '');
+      expect(isDevInstall(entry, root)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('an entry outside the npm root (repo checkout / bun link) is a dev install', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'transcode-root-test-'));
+    const outside = mkdtempSync(path.join(tmpdir(), 'transcode-dev-test-'));
+    try {
+      const entry = path.join(outside, 'trans-code.ts');
+      writeFileSync(entry, '');
+      expect(isDevInstall(entry, root)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('autoUpdateNotice / startAutoUpdate', () => {
+  test('autoUpdateNotice resolves null before startAutoUpdate runs', async () => {
+    expect(await autoUpdateNotice()).toBeNull();
+  });
+
+  test('a disabled config settles the notice to null without touching npm', async () => {
+    useTempConfig(false);
+    startAutoUpdate();
+    expect(await autoUpdateNotice()).toBeNull();
+    // lastCheck must not be written for a disabled updater.
+    const saved = JSON.parse(
+      await Bun.file(process.env.TRANSCODE_CONFIG_PATH!).text(),
+    );
+    expect(saved.autoUpdate).toBe(false);
+  });
+});
 
 const HOUR = 3_600_000;
 const NOW = 1_700_000_000_000;
