@@ -796,6 +796,9 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
           messages: messagesRef.current,
           summary: summaryRef.current,
         });
+        // Host entry first so the streamed digest renders inside this
+        // command's own frame (same contract as the resume path).
+        addHistory({ input: trimmed, output: '' });
         const outcome = process.env.TRANSCODE_MOCK === '1'
           ? { compressed: false as const, record, error: 'mock 模式无模型' }
           : await runCompaction(record, keepN);
@@ -803,18 +806,15 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
           summaryRef.current = outcome.record.summary ?? null;
           messagesRef.current = outcome.record.messages;
           saveSession(outcome.record);
-          addHistory({
-            input: trimmed,
-            output: `已压缩:旧 ${turns.length - keepN} 轮提炼为前情提要,保留最近 ${keepN} 轮。`,
-          });
+          appendChatOutput(`已压缩:旧 ${turns.length - keepN} 轮提炼为前情提要,保留最近 ${keepN} 轮。`);
           for (const entry of transcriptEntries(summaryRef.current, messagesRef.current)) {
             addHistory(entry);
           }
         } else {
-          addHistory({ input: trimmed, output: `⚠ 压缩失败(${outcome.error ?? '未知'}),会话保持原样。` });
+          appendChatOutput(`⚠ 压缩失败(${outcome.error ?? '未知'}),会话保持原样。`);
         }
       } catch {
-        addHistory({ input: trimmed, output: '⚠ 压缩失败,会话保持原样。' });
+        appendChatOutput('⚠ 压缩失败,会话保持原样。');
       } finally {
         setBusyBoth(false);
       }
