@@ -1,4 +1,4 @@
-import { Box, Text, useInput, useApp } from 'ink';
+import { Box, Text, useInput, useApp, useStdout } from 'ink';
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import path from 'node:path';
 import { findCommand, getCommands, type CommandContext } from '../commands.js';
@@ -35,6 +35,7 @@ import {
   slashQuery,
 } from './slash-completion.js';
 import { resolveSubmitInput } from './submit.js';
+import { historyRule } from './history-rule.js';
 import { renderDiff } from './diff-render.js';
 import { createTurnStats, recordCall, shouldCollapse, summaryLine } from './turn-summary.js';
 import { buildSystemPrompt, INIT_PROMPT, loadProjectContext } from '../agent/system-prompt.js';
@@ -64,6 +65,7 @@ interface REPLProps {
 
 export default function REPL({ ctx, updateNotice }: REPLProps) {
   const { exit } = useApp();
+  const { stdout } = useStdout();
   const [input, setInput] = useState('');
   // Multiple keystrokes can be handled in one React batch before a
   // re-render; closures over `input` would see stale values (e.g. the
@@ -970,9 +972,13 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
       {history.map((entry, i) => (
         <Box key={i} flexDirection="column">
           {entry.input && (
-            <Box>
-              <Text color="green">&gt; </Text>
-              <Text>{entry.input}</Text>
+            <Box flexDirection="column">
+              <Text color="gray" dimColor>{historyRule(stdout?.columns ?? 80)}</Text>
+              <Box>
+                <Text color="green" bold>&gt; </Text>
+                <Text color="cyan" bold>{entry.input}</Text>
+              </Box>
+              <Text color="gray" dimColor>{historyRule(stdout?.columns ?? 80)}</Text>
             </Box>
           )}
           {entry.output && (
