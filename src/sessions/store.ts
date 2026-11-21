@@ -44,6 +44,32 @@ export function newSessionId(): string {
   return randomUUID();
 }
 
+/** Inputs for assembling a persistable record (digest is optional). */
+export interface SessionRecordInput {
+  id: string;
+  title: string;
+  createdAt: number;
+  cwd: string;
+  model: string;
+  messages: BaseMessage[];
+  /** Compaction digest; null/undefined records carry no summary field. */
+  summary?: string | null;
+}
+
+/**
+ * Assemble the record persist() and /compact both write. The summary MUST
+ * ride along here — a turn after a compaction otherwise erases the digest
+ * from disk while the old turns are already discarded.
+ */
+export function buildSessionRecord(input: SessionRecordInput): SessionRecord {
+  const { summary, ...rest } = input;
+  return {
+    ...rest,
+    updatedAt: Date.now(),
+    ...(summary ? { summary } : {}),
+  };
+}
+
 function serialize(messages: BaseMessage[]): StoredMessage[] {
   return messages.map((message) => {
     const stored: StoredMessage = { type: message.getType(), content: message.content };

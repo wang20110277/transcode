@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
 import {
+  buildSessionRecord,
   getSession,
   listSessions,
   newSessionId,
@@ -142,6 +143,24 @@ describe('session store', () => {
 
     saveSession({ ...sample('无提要', 'y'), id: 'ses_test2' });
     expect(getSession('ses_test2')?.summary).toBeUndefined();
+  });
+
+  test('buildSessionRecord keeps the compaction digest in the persisted record', () => {
+    const base = {
+      id: 'ses_b1',
+      title: '带提要',
+      createdAt: 1,
+      cwd: '/tmp',
+      model: 'deepseek',
+      messages: sample('x', 'y').messages,
+    };
+    const withDigest = buildSessionRecord({ ...base, summary: '前情提要文本' });
+    expect(withDigest.summary).toBe('前情提要文本');
+    expect(withDigest.updatedAt).toBeGreaterThan(1);
+
+    // Null/undefined digest must not materialize an empty summary field.
+    expect(buildSessionRecord({ ...base, summary: null }).summary).toBeUndefined();
+    expect(buildSessionRecord(base).summary).toBeUndefined();
   });
 
   test('list is ordered newest first', () => {

@@ -21,6 +21,7 @@ import { runAgentLoop, type PermissionRequest } from '../agent/loop.js';
 import { createToolSession } from '../agent/tools/index.js';
 import { getPermissionMode } from '../agent/permission.js';
 import {
+  buildSessionRecord,
   generateTitle,
   listSessions,
   newSessionId,
@@ -419,15 +420,17 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         }
         const conversation = conversationRef.current;
         const persist = () =>
-          saveSession({
-            id: conversation.id,
-            title: conversationTitleRef.current,
-            createdAt: conversation.createdAt,
-            updatedAt: Date.now(),
-            cwd: process.cwd(),
-            model: ctx.modelId,
-            messages: messagesRef.current,
-          });
+          saveSession(
+            buildSessionRecord({
+              id: conversation.id,
+              title: conversationTitleRef.current,
+              createdAt: conversation.createdAt,
+              cwd: process.cwd(),
+              model: ctx.modelId,
+              messages: messagesRef.current,
+              summary: summaryRef.current,
+            }),
+          );
         persist();
         if (!conversation.titled && provider) {
           conversation.titled = true;
@@ -749,16 +752,15 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
       }
       setBusyBoth(true);
       try {
-        const record: SessionRecord = {
+        const record: SessionRecord = buildSessionRecord({
           id: conversationRef.current.id,
           title: conversationTitleRef.current,
           createdAt: conversationRef.current.createdAt,
-          updatedAt: Date.now(),
           cwd: process.cwd(),
           model: ctx.modelId,
           messages: messagesRef.current,
-          ...(summaryRef.current ? { summary: summaryRef.current } : {}),
-        };
+          summary: summaryRef.current,
+        });
         const outcome = process.env.TRANSCODE_MOCK === '1'
           ? { compressed: false as const, record, error: 'mock 模式无模型' }
           : await compressSession(record, createModel(ctx.modelId).model);
@@ -858,8 +860,10 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
     }
     if (key.escape) {
       // While generating, Esc cancels instead of exiting.
-      if (busyRef.current && abortRef.current) {
-        abortRef.current.abort();
+      if (busyRef.current) {
+        // Busy covers both a live agent turn (abort it) and async
+        // compaction (no controller yet — Esc must not quit the app).
+        abortRef.current?.abort();
         return;
       }
       if (phase !== 'idle') {
