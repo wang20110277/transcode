@@ -11,6 +11,47 @@ const PKG = '@trans-ai/trans-code';
 // to the stale version.
 const OFFICIAL = 'https://registry.npmjs.org';
 
+const DEFAULT_INTERVAL_HOURS = 24;
+
+export type AutoUpdatePlan =
+  | { action: 'skip'; reason: 'env-skip' | 'disabled' | 'throttled' | 'up-to-date' | 'unknown-latest' }
+  | { action: 'install'; spec: string; from: string; to: string };
+
+/**
+ * Pure decision for the background auto-update: whether to skip (and why)
+ * or which package spec to install. Order matters — envSkip and the
+ * enabled flag short-circuit before the throttle check so a disabled
+ * updater never hits the registry.
+ */
+export function planAutoUpdate(input: {
+  current: string;
+  /** Latest version from the registry; null when it could not be reached. */
+  latest: string | null;
+  /** 'latest' or a pinned version string. */
+  target: string;
+  enabled: boolean;
+  lastCheck: number;
+  now: number;
+  intervalHours?: number;
+  envSkip?: boolean;
+}): AutoUpdatePlan {
+  if (input.envSkip) return { action: 'skip', reason: 'env-skip' };
+  if (!input.enabled) return { action: 'skip', reason: 'disabled' };
+  const interval =
+    (input.intervalHours ?? DEFAULT_INTERVAL_HOURS) * 3_600_000;
+  if (input.now - input.lastCheck < interval) {
+    return { action: 'skip', reason: 'throttled' };
+  }
+  if (input.target === 'latest') {
+    if (input.latest === null) return { action: 'skip', reason: 'unknown-latest' };
+    if (input.latest === input.current) return { action: 'skip', reason: 'up-to-date' };
+    return { action: 'install', spec: `${PKG}@latest`, from: input.current, to: input.latest };
+  }
+  // Pinned target: stay at it exactly, downgrades included.
+  if (input.target === input.current) return { action: 'skip', reason: 'up-to-date' };
+  return { action: 'install', spec: `${PKG}@${input.target}`, from: input.current, to: input.target };
+}
+
 function sh(cmd: string, args: string[]): Promise<{ code: number; stdout: string }> {
   return new Promise(resolve => {
     const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'inherit'] });
