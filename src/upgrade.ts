@@ -215,8 +215,12 @@ function installedVersionUnder(root: string): string | null {
   }
 }
 
-export async function runUpgrade(): Promise<void> {
-  process.stdout.write(`transcode v${VERSION} — checking for upgrades…\n`);
+export async function runUpgrade(target?: string): Promise<void> {
+  if (target) {
+    process.stdout.write(`transcode v${VERSION} — upgrading to ${target}…\n`);
+  } else {
+    process.stdout.write(`transcode v${VERSION} — checking for upgrades…\n`);
+  }
 
   const entry = realpathSync(fileURLToPath(import.meta.url));
   const root = await npmRoot();
@@ -235,6 +239,19 @@ export async function runUpgrade(): Promise<void> {
         '  · switch to npm install:  npm i -g @trans-ai/trans-code',
       ].join('\n') + '\n',
     );
+    return;
+  }
+
+  if (target) {
+    process.stdout.write(`Upgrading ${VERSION} → ${target}…\n`);
+    const code = await shInherit('npm', ['i', '-g', `${PKG}@${target}`, `--registry=${OFFICIAL}`]);
+    if (code !== 0) {
+      process.stderr.write('[transcode] upgrade failed — see npm output above.\n');
+      process.exitCode = 1;
+      return;
+    }
+    const installed = installedVersionUnder(root);
+    process.stdout.write(`Upgraded to v${installed ?? target}. Restart transcode if it is running.\n`);
     return;
   }
 
