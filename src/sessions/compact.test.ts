@@ -6,6 +6,7 @@ import {
   DEFAULT_KEEP_TURNS,
   TRANSCRIPT_LIMIT,
   compressSession,
+  estimateTokens,
   parseKeepCount,
   transcriptEntries,
   splitTurns,
@@ -155,6 +156,17 @@ describe('compressSession', () => {
     await compressSession(recordWith(12, { longTurn: true }), model, 10);
     expect(model.prompts[0]!.length).toBeLessThan(TRANSCRIPT_LIMIT + 2_000);
     expect(model.prompts[0]).toContain('更早内容已截断');
+  });
+});
+
+describe('estimateTokens', () => {
+  test('sums content chars / 4, floors; empty → 0', () => {
+    expect(estimateTokens([])).toBe(0);
+    expect(estimateTokens([new HumanMessage('a'.repeat(40))])).toBe(10);
+    expect(
+      estimateTokens([new HumanMessage('x'.repeat(10)), new AIMessage('y'.repeat(30))]),
+    ).toBe(10);
+    expect(estimateTokens([new HumanMessage('abcd')])).toBe(1);
   });
 });
 

@@ -19,6 +19,13 @@ export interface CompactModel {
   ): AsyncIterable<{ content: unknown }> | Promise<AsyncIterable<{ content: unknown }>>;
 }
 
+/** Rough token estimate for auto-compact: total content chars / 4. */
+export function estimateTokens(messages: BaseMessage[]): number {
+  let chars = 0;
+  for (const message of messages) chars += contentText(message.content).length;
+  return Math.floor(chars / 4);
+}
+
 /**
  * Split a message list into leading (pre-first-human) messages and turns.
  * A turn starts at each HumanMessage and owns every AI/Tool message until
