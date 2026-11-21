@@ -21,6 +21,48 @@ export interface TranscodeConfig {
   profiles?: Record<string, ProfileConfig>;
   /** Role → profile routing (default / analysis / design / vision / …). */
   routing?: Record<string, string>;
+  /** Auto-update on startup: `false` disables, an object configures it. */
+  autoUpdate?: boolean | AutoUpdateConfig;
+}
+
+/** Raw (on-disk) shape of the autoUpdate config block. */
+export interface AutoUpdateConfig {
+  enabled?: boolean;
+  /** Registry version to stay at; defaults to 'latest'. */
+  target?: string;
+  /** Epoch ms of the last registry check; internal throttle cache. */
+  lastCheck?: number;
+}
+
+/** Normalized form used by the updater. */
+export interface NormalizedAutoUpdate {
+  enabled: boolean;
+  target: string;
+  lastCheck: number;
+}
+
+const DEFAULT_AUTO_UPDATE: NormalizedAutoUpdate = {
+  enabled: true,
+  target: 'latest',
+  lastCheck: 0,
+};
+
+/**
+ * Normalizes the raw autoUpdate config value. Anything unrecognizable
+ * (wrong type, null, arrays) falls back to the enabled default rather
+ * than throwing — a bad config must never break startup.
+ */
+export function normalizeAutoUpdate(raw: unknown): NormalizedAutoUpdate {
+  if (raw === false) return { ...DEFAULT_AUTO_UPDATE, enabled: false };
+  if (raw === null || raw === undefined || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ...DEFAULT_AUTO_UPDATE };
+  }
+  const obj = raw as AutoUpdateConfig;
+  return {
+    enabled: typeof obj.enabled === 'boolean' ? obj.enabled : true,
+    target: typeof obj.target === 'string' && obj.target ? obj.target : 'latest',
+    lastCheck: typeof obj.lastCheck === 'number' ? obj.lastCheck : 0,
+  };
 }
 
 // Overridable so tests never touch the user's real ~/.transcode.json.
