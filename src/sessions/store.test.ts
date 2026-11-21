@@ -103,7 +103,7 @@ describe('session store', () => {
     expect(listSessions().map((s) => s.id).sort()).toEqual(['ses_a', 'ses_b']);
   });
 
-  test('still lists and loads legacy flat files in the sessions root', () => {
+  test('ignores root-level flat json files (legacy layout unsupported)', () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(
       path.join(dir, 'ses_legacy.json'),
@@ -118,8 +118,8 @@ describe('session store', () => {
       }),
     );
 
-    expect(listSessions().map((s) => s.id)).toContain('ses_legacy');
-    expect(getSession('ses_legacy')?.messages[0]?.content).toBe('legacy body');
+    expect(listSessions().map((s) => s.id)).not.toContain('ses_legacy');
+    expect(getSession('ses_legacy')).toBeUndefined();
   });
 
   test('failed save leaves the previous session file intact', () => {

@@ -115,19 +115,15 @@ export function saveSession(record: SessionRecord): void {
   }
 }
 
-/** All session files: per-project subdirectories plus legacy flat files in the root. */
+/** All session files, one per-project subdirectory each. */
 function sessionFiles(): string[] {
   const root = sessionsDir();
   if (!fs.existsSync(root)) return [];
   const files: string[] = [];
   for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-    if (entry.isDirectory()) {
-      for (const file of fs.readdirSync(path.join(root, entry.name))) {
-        if (file.endsWith('.json')) files.push(path.join(root, entry.name, file));
-      }
-    } else if (entry.name.endsWith('.json')) {
-      // Legacy layout (pre per-project partitioning).
-      files.push(path.join(root, entry.name));
+    if (!entry.isDirectory()) continue;
+    for (const file of fs.readdirSync(path.join(root, entry.name))) {
+      if (file.endsWith('.json')) files.push(path.join(root, entry.name, file));
     }
   }
   return files;

@@ -45,13 +45,13 @@ function writeLegacyFlat(id: string, cwd: string): void {
 }
 
 describe('listProjectSessions', () => {
-  test('only returns sessions whose cwd matches, including legacy flat files', () => {
+  test('only returns sessions whose cwd matches; root-level flat files ignored', () => {
     saveSession(sample('ses_a', '对话A', '/tmp/proj-a'));
     saveSession(sample('ses_b', '对话B', '/tmp/proj-b'));
     writeLegacyFlat('ses_legacy', '/tmp/proj-a');
 
     const ids = listProjectSessions('/tmp/proj-a').map((s) => s.id).sort();
-    expect(ids).toEqual(['ses_a', 'ses_legacy']);
+    expect(ids).toEqual(['ses_a']);
   });
 
   test('empty project returns an empty list', () => {

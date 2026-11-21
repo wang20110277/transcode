@@ -19,7 +19,7 @@
 
 ## 设计
 
-- **触发**:`/resume` 无参数 → `listSessions().filter(s => s.cwd === process.cwd())` 取本项目会话(旧平铺文件靠记录里的 `cwd` 字段同样命中),非空则快照前 20 条、`setPhase('session_select')`、清空输入;为空则提示「当前项目暂无历史对话」。
+- **触发**:`/resume` 无参数 → `listSessions().filter(s => s.cwd === process.cwd())` 取本项目会话(不做旧版平铺文件兼容,只认按目录分区的新布局),非空则快照前 20 条、`setPhase('session_select')`、清空输入;为空则提示「当前项目暂无历史对话」。
 - **键位**(新增 `useInput` 分支,照抄 `model_select`):↑↓ 环形移动 cursor;Enter 调共享的恢复逻辑;Esc 走现有 phase 通用取消路径。
 - **恢复逻辑**:从现 `/resume` 分支抽出 `applyResume(record)`(设 conversationRef/标题/messagesRef/toolSession + 确认历史行),带参/无参两条路径共用;恢复后把 `lastSessionsRef` 同步为选择器列表,让紧随其后的 `/resume N` 序号与所见一致。
 - **渲染**:镜像 `model_select` 的块 —— 顶部「恢复对话 (↑↓ 选择 · Enter 恢复 · Esc 取消)」,行格式复用 `/sessions` 的 `N. 标题 · 时间 · 模型 · N 条`,光标行 cyan + `❯`。
