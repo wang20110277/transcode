@@ -847,6 +847,8 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         if (record) {
           setPhase('idle');
           applyResume(record, '/resume');
+          // Stdin-path terminal action: nudge the render flush (Bun quirk).
+          dragFlush();
         }
         return;
       }
