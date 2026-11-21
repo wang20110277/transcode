@@ -24,6 +24,7 @@ import {
   generateTitle,
   getSession,
   listSessions,
+  newSessionId,
   saveSession,
   searchSessions,
 } from '../sessions/store.js';
@@ -336,7 +337,7 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         // Persist the conversation for /sessions and /resume.
         if (!conversationRef.current) {
           conversationRef.current = {
-            id: `ses_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+            id: newSessionId(),
             createdAt: Date.now(),
             titled: false,
           };

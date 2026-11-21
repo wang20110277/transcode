@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import {
@@ -32,6 +33,14 @@ interface StoredMessage {
 // Test isolation mirrors TRANSCODE_CONFIG_PATH.
 const sessionsDir = (): string =>
   process.env.TRANSCODE_SESSIONS_DIR ?? path.join(homedir(), '.transcode', 'sessions');
+
+/** Project subdirectory name (Claude Code style: "/a/b" -> "-a-b"). */
+const projectDir = (cwd: string): string => cwd.split(path.sep).join('-');
+
+/** Fresh conversation id: bare UUID v4, like Claude Code session files. */
+export function newSessionId(): string {
+  return randomUUID();
+}
 
 function serialize(messages: BaseMessage[]): StoredMessage[] {
   return messages.map((message) => {
@@ -72,7 +81,10 @@ function deserialize(stored: StoredMessage[]): BaseMessage[] {
 
 function readRecord(file: string): SessionRecord | null {
   try {
-    const parsed = JSON.parse(readFileSync(file, 'utf8')) as Omit<SessionRecord, 'messages'> & {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as Omit<
+      SessionRecord,
+      'messages'
+    > & {
       messages: StoredMessage[];
     };
     return { ...parsed, messages: deserialize(parsed.messages ?? []) };
@@ -82,28 +94,60 @@ function readRecord(file: string): SessionRecord | null {
 }
 
 export function saveSession(record: SessionRecord): void {
-  const dir = sessionsDir();
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(
-    path.join(dir, `${record.id}.json`),
+  const dir = path.join(sessionsDir(), projectDir(record.cwd));
+  fs.mkdirSync(dir, { recursive: true });
+  const target = path.join(dir, `${record.id}.json`);
+  const tmp = `${target}.tmp`;
+  fs.writeFileSync(
+    tmp,
     JSON.stringify({ ...record, messages: serialize(record.messages) }, null, 2),
   );
+  try {
+    // Atomic replace: a crash mid-write can never truncate the previous session.
+    fs.renameSync(tmp, target);
+  } catch (error) {
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      // Best-effort cleanup; the original error matters more.
+    }
+    throw error;
+  }
+}
+
+/** All session files: per-project subdirectories plus legacy flat files in the root. */
+function sessionFiles(): string[] {
+  const root = sessionsDir();
+  if (!fs.existsSync(root)) return [];
+  const files: string[] = [];
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      for (const file of fs.readdirSync(path.join(root, entry.name))) {
+        if (file.endsWith('.json')) files.push(path.join(root, entry.name, file));
+      }
+    } else if (entry.name.endsWith('.json')) {
+      // Legacy layout (pre per-project partitioning).
+      files.push(path.join(root, entry.name));
+    }
+  }
+  return files;
 }
 
 /** All conversations, newest first. */
 export function listSessions(): SessionRecord[] {
-  const dir = sessionsDir();
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir)
-    .filter((file) => file.endsWith('.json'))
-    .map((file) => readRecord(path.join(dir, file)))
+  return sessionFiles()
+    .map((file) => readRecord(file))
     .filter((record): record is SessionRecord => record !== null)
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 export function getSession(id: string): SessionRecord | undefined {
-  const record = readRecord(path.join(sessionsDir(), `${id}.json`));
-  return record ?? undefined;
+  for (const file of sessionFiles()) {
+    if (path.basename(file) !== `${id}.json`) continue;
+    const record = readRecord(file);
+    if (record) return record;
+  }
+  return undefined;
 }
 
 /** Keyword search over titles AND message content (case-insensitive). */

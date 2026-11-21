@@ -1,11 +1,13 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
+import fs from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
 import {
   getSession,
   listSessions,
+  newSessionId,
   saveSession,
   searchSessions,
   type SessionRecord,
@@ -43,6 +45,15 @@ function sample(title: string, body: string): SessionRecord {
 }
 
 describe('session store', () => {
+  test('newSessionId generates unique UUID v4 ids (Claude Code style)', () => {
+    const uuidV4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+    const a = newSessionId();
+    const b = newSessionId();
+    expect(a).toMatch(uuidV4);
+    expect(b).toMatch(uuidV4);
+    expect(a).not.toBe(b);
+  });
+
   test('save + list roundtrips with metadata', () => {
     saveSession(sample('更新 README', '帮我更新这个仓库的 README'));
 
@@ -76,6 +87,53 @@ describe('session store', () => {
 
     const byBody = searchSessions('天气');
     expect(byBody.map((s) => s.id)).toEqual(['ses_test2']);
+  });
+
+  test('saves each conversation under a per-cwd subdirectory', () => {
+    saveSession({ ...sample('分区存储', 'x'), cwd: '/tmp/proj-a' });
+
+    expect(existsSync(path.join(dir, '-tmp-proj-a', 'ses_test1.json'))).toBe(true);
+    expect(getSession('ses_test1')?.title).toBe('分区存储');
+  });
+
+  test('lists sessions from multiple project directories together', () => {
+    saveSession({ ...sample('对话 A', 'a'), id: 'ses_a', cwd: '/tmp/proj-a' });
+    saveSession({ ...sample('对话 B', 'b'), id: 'ses_b', cwd: '/tmp/proj-b' });
+
+    expect(listSessions().map((s) => s.id).sort()).toEqual(['ses_a', 'ses_b']);
+  });
+
+  test('still lists and loads legacy flat files in the sessions root', () => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      path.join(dir, 'ses_legacy.json'),
+      JSON.stringify({
+        id: 'ses_legacy',
+        title: '旧格式会话',
+        createdAt: 1,
+        updatedAt: 1,
+        cwd: '/other',
+        model: 'deepseek',
+        messages: [{ type: 'human', content: 'legacy body' }],
+      }),
+    );
+
+    expect(listSessions().map((s) => s.id)).toContain('ses_legacy');
+    expect(getSession('ses_legacy')?.messages[0]?.content).toBe('legacy body');
+  });
+
+  test('failed save leaves the previous session file intact', () => {
+    saveSession(sample('旧内容', 'x'));
+    const spy = spyOn(fs, 'renameSync').mockImplementation(() => {
+      throw new Error('EIO');
+    });
+    try {
+      expect(() => saveSession(sample('新内容', 'y'))).toThrow('EIO');
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(getSession('ses_test1')?.title).toBe('旧内容');
   });
 
   test('list is ordered newest first', () => {
