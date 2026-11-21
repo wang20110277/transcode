@@ -4,7 +4,7 @@ import path from 'node:path';
 import { findCommand, getCommands, type CommandContext } from '../commands.js';
 import {
   getAvailableModels,
-  createProvider,
+  createModel,
   setPreferredModel,
   registerApiKey,
   lookupApiKey,
@@ -277,7 +277,7 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         const provider =
           process.env.TRANSCODE_MOCK === '1'
             ? undefined
-            : createProvider(ctx.modelId);
+            : createModel(ctx.modelId);
 
         const projectContext = await loadProjectContext(process.cwd());
         const systemPrompt = buildSystemPrompt(

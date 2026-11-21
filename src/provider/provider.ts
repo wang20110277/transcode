@@ -502,33 +502,6 @@ export function switchNote(displayName: string, pickedModel: string, served?: st
   return `已切换到 ${displayName}`;
 }
 
-/** @deprecated Use createModel instead. Kept for the existing REPL. */
-export function createProviderWithKey(id: string, apiKey: string): TransProvider {
-  const config = MODEL_REGISTRY[id as ModelId];
-  if (!config) throw new Error(`Unknown model: ${id}`);
-
-  registerApiKey(id, apiKey);
-
-  const model =
-    config.provider === 'anthropic'
-      ? new ChatAnthropic({
-          modelName: config.model,
-          anthropicApiKey: apiKey,
-        })
-      : new ChatOpenAI({
-          modelName: config.model,
-          openAIApiKey: apiKey,
-          configuration: config.baseUrl ? { baseURL: config.baseUrl } : undefined,
-        });
-
-  return { modelId: id, model, config };
-}
-
-/** @deprecated Use createModel instead. Kept for the existing REPL. */
-export function createProvider(id: string): TransProvider {
-  return createModel(id);
-}
-
 // ---- REPL key/model persistence (~/.transcode.json) ----
 
 const keyStore = new Map<string, string>(
