@@ -22,12 +22,13 @@ import { createToolSession } from '../agent/tools/index.js';
 import { getPermissionMode } from '../agent/permission.js';
 import {
   generateTitle,
-  getSession,
   listSessions,
   newSessionId,
   saveSession,
   searchSessions,
+  type SessionRecord,
 } from '../sessions/store.js';
+import { listProjectSessions, resolveResumeTarget } from '../sessions/resume.js';
 import { walkFiles } from '../agent/tools/fs-utils.js';
 import { applyCompletion, filterFiles, mentionQuery } from './file-completion.js';
 import {
@@ -56,7 +57,8 @@ type PromptPhase =
   | 'vendor_apikey'
   | 'model_apikey'
   | 'model_check'
-  | 'permission';
+  | 'permission'
+  | 'session_select';
 
 interface REPLProps {
   ctx: CommandContext;
@@ -95,6 +97,8 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
     setPendingModel(id);
   };
   const [modelCursor, setModelCursor] = useState(0);
+  // session_select picker: cursor over the project-scoped session snapshot.
+  const [sessionCursor, setSessionCursor] = useState(0);
   // Model selection flow: vendor → model → key (reused if saved) → check.
   const [pickOptions, setPickOptions] = useState<string[]>([]);
   const [pickCursor, setPickCursor] = useState(0);
@@ -134,6 +138,22 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
   const conversationRef = useRef<{ id: string; createdAt: number; titled: boolean } | null>(null);
   const conversationTitleRef = useRef('');
   const lastSessionsRef = useRef<string[]>([]);
+  // Snapshot for the /resume arrow-key picker (set together with the phase).
+  const sessionPickerRef = useRef<SessionRecord[]>([]);
+  /** Load a record into the live conversation; shared by /resume arg and picker paths. */
+  const applyResume = useCallback(
+    (record: SessionRecord, inputLine: string) => {
+      conversationRef.current = { id: record.id, createdAt: record.createdAt, titled: true };
+      conversationTitleRef.current = record.title;
+      messagesRef.current = record.messages;
+      toolSessionRef.current = createToolSession(process.cwd());
+      addHistory({
+        input: inputLine,
+        output: `已恢复「${record.title}」（${record.messages.length} 条消息，${record.model}），继续对话。`,
+      });
+    },
+    [addHistory],
+  );
 
   // @-mention file completion: lazy file list, active query, dismissed flag.
   const [fileList, setFileList] = useState<string[] | null>(null);
@@ -628,27 +648,24 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
 
     if (cmdName === 'resume') {
       const target = args.join(' ').trim();
-      const list = listSessions();
-      let record = undefined as ReturnType<typeof getSession>;
-      if (/^\d+$/.test(target)) {
-        const indexed = lastSessionsRef.current[Number(target) - 1];
-        record = (indexed ? getSession(indexed) : undefined) ?? list[Number(target) - 1];
-      } else if (target) {
-        record = getSession(target) ?? list.find(
-          (session) => session.id.includes(target) || session.title.includes(target),
-        );
-      }
-      if (!record) {
-        addHistory({ input: trimmed, output: `未找到对话“${target || '(空)'}”。先 /sessions 查看列表。` });
+      if (!target) {
+        // One-step resume: arrow-key picker over this project's sessions.
+        const projectSessions = listProjectSessions(process.cwd()).slice(0, 20);
+        if (projectSessions.length === 0) {
+          addHistory({ input: trimmed, output: '当前项目暂无历史对话。' });
+        } else {
+          sessionPickerRef.current = projectSessions;
+          lastSessionsRef.current = projectSessions.map((session) => session.id);
+          setSessionCursor(0);
+          setPhase('session_select');
+        }
       } else {
-        conversationRef.current = { id: record.id, createdAt: record.createdAt, titled: true };
-        conversationTitleRef.current = record.title;
-        messagesRef.current = record.messages;
-        toolSessionRef.current = createToolSession(process.cwd());
-        addHistory({
-          input: trimmed,
-          output: `已恢复「${record.title}」（${record.messages.length} 条消息，${record.model}），继续对话。`,
-        });
+        const record = resolveResumeTarget(target, lastSessionsRef.current, listSessions());
+        if (!record) {
+          addHistory({ input: trimmed, output: `未找到对话“${target}”。先 /sessions 查看列表。` });
+        } else {
+          applyResume(record, trimmed);
+        }
       }
       commitInput('');
       setHistoryIndex(-1);
@@ -817,6 +834,28 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
       }
       if (key.downArrow) {
         setModelCursor(prev => (prev + 1) % models.length);
+        return;
+      }
+      return;
+    }
+
+    if (phase === 'session_select') {
+      const picker = sessionPickerRef.current;
+      if (picker.length === 0) return;
+      if (key.return) {
+        const record = picker[sessionCursor];
+        if (record) {
+          setPhase('idle');
+          applyResume(record, '/resume');
+        }
+        return;
+      }
+      if (key.upArrow) {
+        setSessionCursor(prev => (prev - 1 + picker.length) % picker.length);
+        return;
+      }
+      if (key.downArrow) {
+        setSessionCursor(prev => (prev + 1) % picker.length);
         return;
       }
       return;
@@ -1028,6 +1067,21 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         </Box>
       )}
 
+      {phase === 'session_select' && (
+        <Box flexDirection="column" marginLeft={2}>
+          <Text color="gray" dimColor>恢复对话 (↑↓ 选择 · Enter 恢复 · Esc 取消)</Text>
+          {sessionPickerRef.current.map((session, i) => (
+            <Box key={session.id}>
+              <Text color={i === sessionCursor ? 'cyan' : undefined}>
+                {i === sessionCursor ? '❯ ' : '  '}
+                {i + 1}. {session.title} · {new Date(session.updatedAt).toLocaleString()} ·{' '}
+                {session.model} · {session.messages.length} 条
+              </Text>
+            </Box>
+          ))}
+        </Box>
+      )}
+
       {phase === 'model_pick' && (
         <Box flexDirection="column" marginLeft={2}>
           {pendingModel === null && customBaseDraft && (
@@ -1062,7 +1116,7 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         </Box>
       )}
 
-      {phase !== 'model_select' && (
+      {phase !== 'model_select' && phase !== 'session_select' && (
         <Box flexDirection="column">
           <Text color="gray" dimColor>{historyRule(stdout?.columns ?? 80)}</Text>
           <Box>
