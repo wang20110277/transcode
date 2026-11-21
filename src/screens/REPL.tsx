@@ -983,7 +983,7 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
           )}
           {entry.output && (
             <Box marginLeft={2}>
-              <Text color="gray">{entry.output}</Text>
+              <Text>{entry.output}</Text>
             </Box>
           )}
         </Box>
