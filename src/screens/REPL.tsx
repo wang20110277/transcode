@@ -1062,10 +1062,14 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
       )}
 
       {phase !== 'model_select' && (
-        <Box>
-          <Text color={phase === 'idle' ? 'green' : 'yellow'}>{promptLabel}</Text>
-          <Text>{phase === 'model_apikey' ? '*'.repeat(input.length) : input}</Text>
-          <Text color="gray">▎</Text>
+        <Box flexDirection="column">
+          <Text color="gray" dimColor>{historyRule(stdout?.columns ?? 80)}</Text>
+          <Box>
+            <Text color={phase === 'idle' ? 'green' : 'yellow'}>{promptLabel}</Text>
+            <Text>{phase === 'model_apikey' ? '*'.repeat(input.length) : input}</Text>
+            <Text color="gray">▎</Text>
+          </Box>
+          <Text color="gray" dimColor>{historyRule(stdout?.columns ?? 80)}</Text>
         </Box>
       )}
 
