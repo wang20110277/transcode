@@ -153,3 +153,90 @@ describe('planAutoUpdate', () => {
     });
   });
 });
+
+describe('background update silence (spawned-runner E2E)', () => {
+  /**
+   * Spawns a runner that calls startAutoUpdate() against a fake npm whose
+   * non-`root` calls fail on stderr after a 5s sleep (degraded network).
+   * `holdMs` keeps the runner alive that long, simulating a REPL session.
+   * Returns the child's exit status and captured stderr.
+   */
+  async function runAgainstSlowFailingNpm(holdMs: number) {
+    const dir = mkdtempSync(path.join(tmpdir(), 'transcode-silence-test-'));
+    try {
+      const bin = path.join(dir, 'bin');
+      mkdirSync(bin);
+      writeFileSync(
+        path.join(bin, 'npm'),
+        [
+          '#!/bin/sh',
+          // A root that contains every path lets the dev-install guard pass.
+          'if [ "$1" = "root" ]; then echo "/"; exit 0; fi',
+          'sleep 5',
+          'echo "npm error fake-network-boom" >&2',
+          'exit 1',
+        ].join('\n'),
+      );
+      const { chmodSync } = await import('node:fs');
+      chmodSync(path.join(bin, 'npm'), 0o755);
+
+      const configPath = path.join(dir, 'config.json');
+      writeFileSync(configPath, JSON.stringify({ autoUpdate: { lastCheck: 0 } }));
+
+      const runner = path.join(dir, 'runner.ts');
+      writeFileSync(
+        runner,
+        `import { startAutoUpdate } from ${JSON.stringify(path.join(import.meta.dir, 'upgrade.ts'))};\n` +
+          'startAutoUpdate();\n' +
+          `setTimeout(() => {}, ${holdMs});\n`,
+      );
+
+      const { spawnSync } = await import('node:child_process');
+      // Strip bun-test-injected vars: a child `bun <file>` with BUN_TEST_*
+      // set misbehaves. Keep the ambient PATH/HOME only.
+      const cleanEnv: Record<string, string> = {};
+      for (const [key, value] of Object.entries(process.env)) {
+        if (value !== undefined && !key.startsWith('BUN_')) cleanEnv[key] = value;
+      }
+      const result = spawnSync(process.execPath, [runner], {
+        timeout: 9000,
+        encoding: 'utf8',
+        env: {
+          ...cleanEnv,
+          PATH: `${bin}:${process.env.PATH}`,
+          TRANSCODE_CONFIG_PATH: configPath,
+        },
+      });
+      return {
+        status: result.status,
+        signal: result.signal,
+        stderr: result.stderr ?? '',
+      };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test(
+    'quitting right after startup must not hang on a slow npm',
+    async () => {
+      const { status, signal, stderr } = await runAgainstSlowFailingNpm(0);
+      expect(
+        `status=${status} signal=${signal}\n${stderr.slice(0, 300)}`,
+      ).toBe('status=0 signal=null\n');
+    },
+    15_000,
+  );
+
+  test(
+    'npm failure text must never reach the terminal (silent failure)',
+    async () => {
+      // Stay alive past the fake npm's 5s sleep so the failure would land
+      // if stderr were inherited.
+      const { status, stderr } = await runAgainstSlowFailingNpm(6500);
+      expect(status).toBe(0);
+      expect(stderr).not.toContain('fake-network-boom');
+    },
+    15_000,
+  );
+});

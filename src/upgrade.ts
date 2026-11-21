@@ -70,16 +70,34 @@ export function isDevInstall(entryPath: string, npmRoot: string): boolean {
   }
 }
 
-/** Like sh(), but fully silent — background installs must not spew into the TUI. */
+/**
+ * Like sh(), but fully silent AND detached: background updates must never
+ * write into the TUI, and must never keep the event loop (and thereby a
+ * quitting REPL) alive until npm finishes. A kill timer bounds a hung npm.
+ */
 function shQuiet(cmd: string, args: string[]): Promise<{ code: number; stdout: string }> {
   return new Promise(resolve => {
     const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let settled = false;
+    const settle = (code: number, stdout: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ code, stdout });
+    };
+    const timer = setTimeout(() => child.kill('SIGKILL'), 120_000);
+    timer.unref?.();
+    // Detach: a REPL that quits mid-check exits promptly; an orphaned npm
+    // that still completes is benign (the next startup self-corrects).
+    child.unref?.();
+    (child.stdout as { unref?: () => void } | null)?.unref?.();
+    (child.stderr as { unref?: () => void } | null)?.unref?.();
     let stdout = '';
     child.stdout.on('data', (d: Buffer) => {
       stdout += d.toString();
     });
-    child.on('error', () => resolve({ code: 1, stdout }));
-    child.on('close', code => resolve({ code: code ?? 1, stdout }));
+    child.on('error', () => settle(1, stdout));
+    child.on('close', code => settle(code ?? 1, stdout));
   });
 }
 
@@ -129,7 +147,7 @@ export function startAutoUpdate(): void {
         return null;
       }
 
-      const latest = auto.target === 'latest' ? await latestVersion() : auto.target;
+      const latest = auto.target === 'latest' ? await latestVersion(true) : auto.target;
       const plan = planAutoUpdate({
         current: VERSION,
         latest,
@@ -204,8 +222,11 @@ async function npmRoot(): Promise<string> {
   return r.stdout.trim();
 }
 
-async function latestVersion(): Promise<string | null> {
-  const r = await sh('npm', ['view', `${PKG}@latest`, 'version', `--registry=${OFFICIAL}`]);
+async function latestVersion(quiet = false): Promise<string | null> {
+  const run = quiet
+    ? shQuiet('npm', ['view', `${PKG}@latest`, 'version', `--registry=${OFFICIAL}`])
+    : sh('npm', ['view', `${PKG}@latest`, 'version', `--registry=${OFFICIAL}`]);
+  const r = await run;
   if (r.code !== 0) return null;
   const v = r.stdout.trim();
   return v || null;
