@@ -28,6 +28,12 @@ import {
 } from '../sessions/store.js';
 import { walkFiles } from '../agent/tools/fs-utils.js';
 import { applyCompletion, filterFiles, mentionQuery } from './file-completion.js';
+import {
+  applySlashCompletion,
+  filterSlashCommands,
+  slashQuery,
+} from './slash-completion.js';
+import { resolveSubmitInput } from './submit.js';
 import { renderDiff } from './diff-render.js';
 import { createTurnStats, recordCall, shouldCollapse, summaryLine } from './turn-summary.js';
 import { buildSystemPrompt, INIT_PROMPT, loadProjectContext } from '../agent/system-prompt.js';
@@ -155,6 +161,23 @@ export default function REPL({ ctx }: REPLProps) {
     () => (mentionActive && fileList ? filterFiles(fileList, mention ?? '', 8) : []),
     [mentionActive, fileList, mention],
   );
+
+  // Slash-command popup (mirrors the @-mention popup): candidates for the
+  // current input, a cursor, and a dismissed flag reset when the query changes.
+  const [slashCursor, setSlashCursor] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState(false);
+  const slashPrefix = phase === 'idle' && !busy ? slashQuery(input) : null;
+  const slashCandidates = useMemo(
+    () =>
+      slashPrefix !== null && !slashDismissed
+        ? filterSlashCommands(input, getCommands())
+        : [],
+    [slashPrefix, slashDismissed, input],
+  );
+  useEffect(() => {
+    setSlashCursor(0);
+    if (slashPrefix === null) setSlashDismissed(false);
+  }, [slashPrefix]);
   const pendingPermissionRef = useRef<{
     request: PermissionRequest;
     resolve: (allow: boolean) => void;
@@ -458,8 +481,10 @@ export default function REPL({ ctx }: REPLProps) {
   );
 
   const handleSubmit = useCallback(async (raw: string) => {
-    const trimmed = raw.trim();
-    if (!trimmed) return;
+    // Bare Enter is a no-op except at the apikey prompt, where it means
+    // "reuse the saved key" (the prompt's 回车沿用 hint).
+    const trimmed = resolveSubmitInput(phase, raw);
+    if (trimmed === null) return;
 
     if (phase === 'model_apikey' || phase === 'model_check') {
       await handleApiKey(trimmed);
@@ -643,6 +668,11 @@ export default function REPL({ ctx }: REPLProps) {
       setMentionDismissed(true);
       return;
     }
+    // Slash-command popup: same — Esc dismisses instead of exiting.
+    if (key.escape && slashCandidates.length > 0) {
+      setSlashDismissed(true);
+      return;
+    }
     if (key.escape) {
       // While generating, Esc cancels instead of exiting.
       if (busyRef.current && abortRef.current) {
@@ -771,6 +801,23 @@ export default function REPL({ ctx }: REPLProps) {
       }
       if (key.tab || key.return) {
         commitInput(applyCompletion(inputRef.current, mentionCandidates[mentionCursor]));
+        return;
+      }
+    }
+
+    // Slash-command popup: ↑↓ navigate, Tab/Enter complete (takes precedence
+    // over history navigation and submission).
+    if (phase === 'idle' && slashCandidates.length > 0) {
+      if (key.upArrow) {
+        setSlashCursor(prev => (prev - 1 + slashCandidates.length) % slashCandidates.length);
+        return;
+      }
+      if (key.downArrow) {
+        setSlashCursor(prev => (prev + 1) % slashCandidates.length);
+        return;
+      }
+      if (key.tab || key.return) {
+        commitInput(applySlashCompletion(inputRef.current, slashCandidates[slashCursor]!.name));
         return;
       }
     }
@@ -942,18 +989,19 @@ export default function REPL({ ctx }: REPLProps) {
         </Box>
       )}
 
-      {phase === 'idle' && input.startsWith('/') && (() => {
-        const prefix = input.slice(1).toLowerCase();
-        const matches = getCommands()
-          .filter(c => !prefix || c.name.startsWith(prefix))
-          .map(c => `  /${c.name.padEnd(10)} ${c.description}`);
-        if (matches.length === 0 || (prefix && matches.length === 1 && matches[0].slice(2, 2 + prefix.length).toLowerCase() === prefix)) return null;
-        return (
-          <Box marginLeft={2}>
-            <Text color="blue" dimColor>{matches.join('\n')}</Text>
-          </Box>
-        );
-      })()}
+      {phase === 'idle' && slashCandidates.length > 0 && (
+        <Box flexDirection="column" marginLeft={2}>
+          {slashCandidates.map((cmd, i) => (
+            <Box key={cmd.name}>
+              <Text color={i === slashCursor ? 'cyan' : 'gray'}>
+                {i === slashCursor ? '❯ ' : '  '}
+                /{cmd.name.padEnd(10)} {cmd.description}
+              </Text>
+            </Box>
+          ))}
+          <Text color="gray" dimColor>↑↓ navigate · tab/enter complete · esc close</Text>
+        </Box>
+      )}
 
       {phase === 'idle' && !busy && mentionActive && (
         <Box flexDirection="column" marginLeft={2}>

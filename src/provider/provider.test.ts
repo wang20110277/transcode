@@ -68,6 +68,12 @@ describe('vendor model lists', () => {
     expect(glm).toContain('glm-4.5');
   });
 
+  test('deepseek lists the current model line', () => {
+    const deepseek = vendorModels('deepseek');
+    expect(deepseek).toContain('deepseek-v4-pro');
+    expect(deepseek).toContain('deepseek-flash');
+  });
+
   test('spec mapping routes registry ids to provider prefixes', () => {
     expect(vendorModelSpec('deepseek', 'deepseek-reasoner')).toBe('deepseek:deepseek-reasoner');
     expect(vendorModelSpec('opus', 'claude-sonnet-4')).toBe('anthropic:claude-sonnet-4');

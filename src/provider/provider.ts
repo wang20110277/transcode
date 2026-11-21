@@ -87,7 +87,7 @@ const MODEL_REGISTRY: Record<ModelId, ModelConfig> = {
 const VENDOR_MODELS: Partial<Record<ModelId, string[]>> = {
   opus: ['claude-opus-4-20250514', 'claude-sonnet-4-20250514'],
   gpt: ['gpt-4o', 'gpt-4o-mini'],
-  deepseek: ['deepseek-chat', 'deepseek-reasoner'],
+  deepseek: ['deepseek-v4-pro', 'deepseek-flash'],
   glm: ['glm-4.6', 'glm-4.5', 'glm-4.5-air', 'glm-4-flash'],
   glmc: ['glm-4.6', 'glm-4.5'],
   minimax: ['MiniMax-Text-01'],
