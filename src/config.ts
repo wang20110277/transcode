@@ -72,17 +72,21 @@ export interface AutoCompactConfig {
   enabled?: boolean;
   /** Compact when the estimated context reaches this many chars. */
   thresholdChars?: number;
+  /** Turns kept verbatim when auto-compacting (default 1). */
+  keepTurns?: number;
 }
 
 /** Normalized form used by the REPL checkpoint. */
 export interface NormalizedAutoCompact {
   enabled: boolean;
   thresholdChars: number;
+  keepTurns: number;
 }
 
 const DEFAULT_AUTO_COMPACT: NormalizedAutoCompact = {
   enabled: true,
   thresholdChars: 200_000,
+  keepTurns: 1,
 };
 
 /**
@@ -100,9 +104,14 @@ export function normalizeAutoCompact(raw: unknown): NormalizedAutoCompact {
     typeof obj.thresholdChars === 'number' && obj.thresholdChars > 0
       ? obj.thresholdChars
       : DEFAULT_AUTO_COMPACT.thresholdChars;
+  const keepTurns =
+    typeof obj.keepTurns === 'number' && obj.keepTurns >= 1
+      ? Math.floor(obj.keepTurns)
+      : DEFAULT_AUTO_COMPACT.keepTurns;
   return {
     enabled: typeof obj.enabled === 'boolean' ? obj.enabled : true,
     thresholdChars: threshold,
+    keepTurns,
   };
 }
 

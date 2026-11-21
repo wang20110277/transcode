@@ -354,7 +354,7 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         messages: messagesRef.current,
         summary: summaryRef.current,
       });
-      const outcome = await runCompaction(record, DEFAULT_KEEP_TURNS);
+      const outcome = await runCompaction(record, cfg.keepTurns);
       if (!outcome.compressed) throw new Error(outcome.error ?? '未知');
       summaryRef.current = outcome.record.summary ?? null;
       messagesRef.current = outcome.record.messages;
