@@ -5,6 +5,7 @@ import { findCommand, getCommands, type CommandContext } from '../commands.js';
 import {
   getAvailableModels,
   createModel,
+  getRouting,
   setPreferredModel,
   registerApiKey,
   lookupApiKey,
@@ -240,20 +241,20 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
   /** Shared resume flow: auto-compact over-long sessions, then load + render. */
   const resumeWith = async (record: SessionRecord, inputLine: string, keepTurns = DEFAULT_KEEP_TURNS) => {
     const { turns } = splitTurns(record.messages);
-    let finalRecord = record;
+    // Load first so the confirmation entry hosts the streamed digest.
+    applyResume(record, inputLine);
     let oldTurns = 0;
-    if (turns.length > keepTurns) {
+    if (turns.length > keepTurns && process.env.TRANSCODE_MOCK !== '1') {
       setBusyBoth(true);
       try {
-        if (process.env.TRANSCODE_MOCK !== '1') {
-          const outcome = await compressSession(record, createModel(ctx.modelId).model, keepTurns);
-          if (outcome.compressed) {
-            finalRecord = outcome.record;
-            oldTurns = turns.length - keepTurns;
-            saveSession(finalRecord);
-          } else {
-            addHistory({ input: '', output: `⚠ 提炼失败(${outcome.error ?? '未知'}),已恢复完整对话。` });
-          }
+        const outcome = await runCompaction(record, keepTurns);
+        if (outcome.compressed) {
+          oldTurns = turns.length - keepTurns;
+          summaryRef.current = outcome.record.summary ?? null;
+          messagesRef.current = outcome.record.messages;
+          saveSession(outcome.record);
+        } else {
+          addHistory({ input: '', output: `⚠ 提炼失败(${outcome.error ?? '未知'}),已恢复完整对话。` });
         }
       } catch {
         addHistory({ input: '', output: '⚠ 提炼失败,已恢复完整对话。' });
@@ -261,7 +262,6 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         setBusyBoth(false);
       }
     }
-    applyResume(finalRecord, inputLine);
     // Restore in the original conversation form: each message becomes a
     // history entry (rule-framed questions, full-length replies).
     for (const entry of transcriptEntries(summaryRef.current, messagesRef.current, oldTurns || undefined)) {
@@ -279,6 +279,35 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
       return next;
     });
   }, []);
+
+  /**
+   * One shared compaction run for /resume and /compact: fast-model routing
+   * (routing.compact → fallback current model) with the digest streamed
+   * live into the chat area.
+   */
+  const runCompaction = async (
+    record: SessionRecord,
+    keepTurns: number,
+  ): Promise<{ compressed: boolean; record: SessionRecord; error?: string }> => {
+    appendChatOutput('\n正在提炼前情提要…\n');
+    try {
+      const outcome = await compressSession(
+        record,
+        createModel(getRouting().compact ?? ctx.modelId).model,
+        keepTurns,
+        (delta) => appendChatOutput(delta),
+      );
+      appendChatOutput('\n\n');
+      return outcome;
+    } catch (error) {
+      appendChatOutput('\n\n');
+      return {
+        compressed: false,
+        record,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  };
 
   const askInTerminal = useCallback(
     (request: PermissionRequest, signal: AbortSignal): Promise<boolean> => {
@@ -769,7 +798,7 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         });
         const outcome = process.env.TRANSCODE_MOCK === '1'
           ? { compressed: false as const, record, error: 'mock 模式无模型' }
-          : await compressSession(record, createModel(ctx.modelId).model, keepN);
+          : await runCompaction(record, keepN);
         if (outcome.compressed) {
           summaryRef.current = outcome.record.summary ?? null;
           messagesRef.current = outcome.record.messages;

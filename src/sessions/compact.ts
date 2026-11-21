@@ -10,9 +10,13 @@ export const TRANSCRIPT_LIMIT = 40_000;
 /** Cap on the distilled summary: stop consuming the stream past this. */
 export const COMPACT_MAX_SUMMARY_CHARS = 1200;
 
-/** Minimal streaming model surface needed for distillation (mock-friendly). */
+/** Minimal streaming model surface needed for distillation (mock-friendly).
+ * LangChain's model.stream() returns Promise<IterableReadableStream>, plain
+ * async generators return the iterable directly — both are accepted. */
 export interface CompactModel {
-  stream(input: string): AsyncIterable<{ content: unknown }>;
+  stream(
+    input: string,
+  ): AsyncIterable<{ content: unknown }> | Promise<AsyncIterable<{ content: unknown }>>;
 }
 
 /**
@@ -101,7 +105,8 @@ export async function compressSession(
   const old = turns.slice(0, turns.length - window);
   let raw = '';
   try {
-    for await (const chunk of model.stream(buildPrompt(record.summary, old))) {
+    const stream = await model.stream(buildPrompt(record.summary, old));
+    for await (const chunk of stream) {
       const text = typeof chunk.content === 'string' ? chunk.content : '';
       if (text) onDelta?.(text);
       raw += text;
