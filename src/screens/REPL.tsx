@@ -30,7 +30,7 @@ import {
   type SessionRecord,
 } from '../sessions/store.js';
 import { listProjectSessions, resolveResumeTarget } from '../sessions/resume.js';
-import { KEEP_TURNS, compressSession, transcriptEntries, splitTurns } from '../sessions/compact.js';
+import { DEFAULT_KEEP_TURNS, compressSession, parseKeepCount, transcriptEntries, splitTurns } from '../sessions/compact.js';
 import { walkFiles } from '../agent/tools/fs-utils.js';
 import { applyCompletion, filterFiles, mentionQuery } from './file-completion.js';
 import {
@@ -238,18 +238,18 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
   }, []);
 
   /** Shared resume flow: auto-compact over-long sessions, then load + render. */
-  const resumeWith = async (record: SessionRecord, inputLine: string) => {
+  const resumeWith = async (record: SessionRecord, inputLine: string, keepTurns = DEFAULT_KEEP_TURNS) => {
     const { turns } = splitTurns(record.messages);
     let finalRecord = record;
     let oldTurns = 0;
-    if (turns.length > KEEP_TURNS) {
+    if (turns.length > keepTurns) {
       setBusyBoth(true);
       try {
         if (process.env.TRANSCODE_MOCK !== '1') {
-          const outcome = await compressSession(record, createModel(ctx.modelId).model);
+          const outcome = await compressSession(record, createModel(ctx.modelId).model, keepTurns);
           if (outcome.compressed) {
             finalRecord = outcome.record;
-            oldTurns = turns.length - KEEP_TURNS;
+            oldTurns = turns.length - keepTurns;
             saveSession(finalRecord);
           } else {
             addHistory({ input: '', output: `⚠ 提炼失败(${outcome.error ?? '未知'}),已恢复完整对话。` });
@@ -706,7 +706,12 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
     }
 
     if (cmdName === 'resume') {
-      const target = args.join(' ').trim();
+      // args[1], when present, is the keep-turns attempt; the target keeps
+      // its original multi-word semantics when no second arg is given.
+      const hasKeepArg = args.length > 1;
+      const target = (hasKeepArg ? args[0] : args.join(' ')).trim();
+      const { keep, error } = parseKeepCount(hasKeepArg ? args[1] : undefined);
+      if (error) addHistory({ input: '', output: `⚠ ${error}` });
       if (!target) {
         // One-step resume: arrow-key picker over this project's sessions.
         const projectSessions = listProjectSessions(process.cwd()).slice(0, 20);
@@ -723,7 +728,7 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         if (!record) {
           addHistory({ input: trimmed, output: `未找到对话“${target}”。先 /sessions 查看列表。` });
         } else {
-          await resumeWith(record, trimmed);
+          await resumeWith(record, trimmed, keep);
         }
       }
       commitInput('');
@@ -745,9 +750,12 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         finishCompact();
         return;
       }
+      const { keep, error } = parseKeepCount(args[0]);
+      const keepN = keep ?? DEFAULT_KEEP_TURNS;
+      if (error) addHistory({ input: '', output: `⚠ ${error}` });
       const { turns } = splitTurns(messagesRef.current);
-      if (turns.length <= KEEP_TURNS) {
-        addHistory({ input: trimmed, output: `无需压缩:当前 ${turns.length} 轮 ≤ ${KEEP_TURNS}。` });
+      if (turns.length <= keepN) {
+        addHistory({ input: trimmed, output: `无需压缩:当前 ${turns.length} 轮 ≤ ${keepN}。` });
         finishCompact();
         return;
       }
@@ -764,14 +772,14 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         });
         const outcome = process.env.TRANSCODE_MOCK === '1'
           ? { compressed: false as const, record, error: 'mock 模式无模型' }
-          : await compressSession(record, createModel(ctx.modelId).model);
+          : await compressSession(record, createModel(ctx.modelId).model, keepN);
         if (outcome.compressed) {
           summaryRef.current = outcome.record.summary ?? null;
           messagesRef.current = outcome.record.messages;
           saveSession(outcome.record);
           addHistory({
             input: trimmed,
-            output: `已压缩:旧 ${turns.length - KEEP_TURNS} 轮提炼为前情提要,保留最近 ${KEEP_TURNS} 轮。`,
+            output: `已压缩:旧 ${turns.length - keepN} 轮提炼为前情提要,保留最近 ${keepN} 轮。`,
           });
           for (const entry of transcriptEntries(summaryRef.current, messagesRef.current)) {
             addHistory(entry);

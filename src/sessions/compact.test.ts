@@ -1,7 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages';
 import type { SessionRecord } from './store.js';
-import { KEEP_TURNS, TRANSCRIPT_LIMIT, compressSession, transcriptEntries, splitTurns } from './compact.js';
+import {
+  DEFAULT_KEEP_TURNS,
+  TRANSCRIPT_LIMIT,
+  compressSession,
+  parseKeepCount,
+  transcriptEntries,
+  splitTurns,
+} from './compact.js';
 
 function turn(n: number, text = 'x'): BaseMessage[] {
   return [new HumanMessage(`问题${n}:${text}`), new AIMessage(`回答${n}:${text}`)];
@@ -55,18 +62,29 @@ describe('splitTurns', () => {
 });
 
 describe('compressSession', () => {
-  test('more than KEEP_TURNS: trims to window, sets summary, keeps leading, bumps updatedAt', async () => {
-    const { compressed, record } = await compressSession(recordWith(12), mockModel('提要内容'));
+  test('default keeps only 1 turn', async () => {
+    const { compressed, record } = await compressSession(recordWith(3), mockModel('提要内容'));
     expect(compressed).toBe(true);
     expect(record.summary).toBe('提要内容');
-    expect(splitTurns(record.messages).turns.length).toBe(KEEP_TURNS);
+    expect(splitTurns(record.messages).turns.length).toBe(DEFAULT_KEEP_TURNS);
+    expect(splitTurns(record.messages).turns.length).toBe(1);
     expect(record.messages[0]!.getType()).toBe('system');
     expect(record.updatedAt).toBeGreaterThan(1);
   });
 
-  test('at or below KEEP_TURNS is a no-op returning the original record', async () => {
-    const rec = recordWith(KEEP_TURNS);
-    const { compressed, record } = await compressSession(rec, mockModel('x'));
+  test('explicit keepTurns=10 keeps 10', async () => {
+    const { record } = await compressSession(recordWith(12), mockModel('提要'), 10);
+    expect(splitTurns(record.messages).turns.length).toBe(10);
+  });
+
+  test('keepTurns below 1 clamps to 1', async () => {
+    const { record } = await compressSession(recordWith(3), mockModel('提要'), 0);
+    expect(splitTurns(record.messages).turns.length).toBe(1);
+  });
+
+  test('at or below keepTurns is a no-op returning the original record', async () => {
+    const rec = recordWith(10);
+    const { compressed, record } = await compressSession(rec, mockModel('x'), 10);
     expect(compressed).toBe(false);
     expect(record).toBe(rec);
   });
@@ -78,29 +96,39 @@ describe('compressSession', () => {
         throw new Error('API down');
       },
     };
-    const { compressed, record, error } = await compressSession(rec, failing);
+    const { compressed, record, error } = await compressSession(rec, failing, 10);
     expect(compressed).toBe(false);
     expect(error).toBeDefined();
     expect(record).toBe(rec);
   });
 
   test('empty model reply is treated as failure', async () => {
-    const { compressed, error } = await compressSession(recordWith(12), mockModel('   '));
+    const { compressed, error } = await compressSession(recordWith(12), mockModel('   '), 10);
     expect(compressed).toBe(false);
     expect(error).toBeDefined();
   });
 
   test('rolling merge: previous summary appears in the prompt', async () => {
     const model = mockModel('新提要');
-    await compressSession(recordWith(12, { summary: '旧提要内容' }), model);
+    await compressSession(recordWith(12, { summary: '旧提要内容' }), model, 10);
     expect(model.prompts[0]).toContain('旧提要内容');
   });
 
   test('huge old transcript is truncated before invoking the model', async () => {
     const model = mockModel('提要');
-    await compressSession(recordWith(12, { longTurn: true }), model);
+    await compressSession(recordWith(12, { longTurn: true }), model, 10);
     expect(model.prompts[0]!.length).toBeLessThan(TRANSCRIPT_LIMIT + 2_000);
     expect(model.prompts[0]).toContain('更早内容已截断');
+  });
+});
+
+describe('parseKeepCount', () => {
+  test('undefined → default; "5" → 5; "0"/"abc" → error, no keep', () => {
+    expect(parseKeepCount(undefined)).toEqual({});
+    expect(parseKeepCount('5')).toEqual({ keep: 5 });
+    expect(parseKeepCount('0').keep).toBeUndefined();
+    expect(parseKeepCount('0').error).toBeDefined();
+    expect(parseKeepCount('abc').error).toBeDefined();
   });
 });
 

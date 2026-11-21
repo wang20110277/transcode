@@ -1,8 +1,8 @@
 import { AIMessage, type BaseMessage, type MessageContent } from '@langchain/core/messages';
 import type { SessionRecord } from './store.js';
 
-/** Verbatim window kept on compaction; older turns get distilled. */
-export const KEEP_TURNS = 10;
+/** Default verbatim window kept on compaction; older turns get distilled. */
+export const DEFAULT_KEEP_TURNS = 1;
 
 /** Cap on the transcript fed to the distilling model (protects its context). */
 export const TRANSCRIPT_LIMIT = 40_000;
@@ -73,19 +73,32 @@ function replyText(content: unknown): string {
 }
 
 /**
+ * Validate a raw keep-turns argument: undefined → default (no opinion),
+ * pure digits ≥1 → {keep}, anything else → {error} so callers can show a
+ * usage hint and proceed with the default.
+ */
+export function parseKeepCount(raw: string | undefined): { keep?: number; error?: string } {
+  if (raw === undefined) return {};
+  if (/^\d+$/.test(raw) && Number(raw) >= 1) return { keep: Number(raw) };
+  return { error: `保留轮数需为 ≥1 的整数,已按默认 ${DEFAULT_KEEP_TURNS} 轮执行` };
+}
+
+/**
  * Distill turns older than the kept window into `summary`, returning a new
- * record trimmed to [leading, last KEEP_TURNS turns]. ≤KEEP_TURNS or a failed
- * model call returns the original record unchanged (with `error` set on
- * failure) — callers fall back to a full restore.
+ * record trimmed to [leading, last keepTurns turns]. At or below the window,
+ * or on a failed model call, returns the original record unchanged (with
+ * `error` set on failure) — callers fall back to a full restore.
  */
 export async function compressSession(
   record: SessionRecord,
   model: CompactModel,
+  keepTurns = DEFAULT_KEEP_TURNS,
 ): Promise<{ compressed: boolean; record: SessionRecord; error?: string }> {
+  const window = Math.max(1, keepTurns);
   const { leading, turns } = splitTurns(record.messages);
-  if (turns.length <= KEEP_TURNS) return { compressed: false, record };
-  const keep = turns.slice(-KEEP_TURNS);
-  const old = turns.slice(0, turns.length - KEEP_TURNS);
+  if (turns.length <= window) return { compressed: false, record };
+  const keep = turns.slice(-window);
+  const old = turns.slice(0, turns.length - window);
   let summary: string;
   try {
     const response = await model.invoke(buildPrompt(record.summary, old));
