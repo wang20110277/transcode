@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages';
 import type { SessionRecord } from './store.js';
-import { KEEP_TURNS, TRANSCRIPT_LIMIT, compressSession, renderTranscript, splitTurns } from './compact.js';
+import { KEEP_TURNS, TRANSCRIPT_LIMIT, compressSession, transcriptEntries, splitTurns } from './compact.js';
 
 function turn(n: number, text = 'x'): BaseMessage[] {
   return [new HumanMessage(`问题${n}:${text}`), new AIMessage(`回答${n}:${text}`)];
@@ -104,29 +104,29 @@ describe('compressSession', () => {
   });
 });
 
-describe('renderTranscript', () => {
-  test('renders summary block plus human/ai pairs, skipping tool/system, capping line length', () => {
+describe('transcriptEntries', () => {
+  test('digest first, then per-message entries: human→input, ai→output, full content, tool/system skipped', () => {
     const messages: BaseMessage[] = [
       new SystemMessage('sys'),
       new HumanMessage('问题甲'),
-      new AIMessage({ content: '调用', tool_calls: [{ id: 't1', name: 'bash', args: {} }] }),
+      new AIMessage({ content: '', tool_calls: [{ id: 't1', name: 'bash', args: {} }] }),
       new ToolMessage({ content: 'out', tool_call_id: 't1', name: 'bash' }),
-      new AIMessage('回答'.repeat(100)),
+      new AIMessage('回答'.repeat(200)),
     ];
-    const out = renderTranscript('前情文本', messages);
-    expect(out).toContain('前情提要');
-    expect(out).toContain('前情文本');
-    expect(out).toContain('你: 问题甲');
-    expect(out).toContain('AI:');
-    expect(out).not.toContain('工具');
-    const longest = Math.max(...out.split('\n').map((l) => l.length));
-    expect(longest).toBeLessThanOrEqual(140);
+    const entries = transcriptEntries('前情文本', messages, 3);
+    // digest entry
+    expect(entries[0]).toEqual({ input: '', output: '📝 前情提要(旧 3 轮)\n前情文本' });
+    const rest = entries.slice(1);
+    expect(rest).toHaveLength(2);
+    expect(rest[0]).toEqual({ input: '问题甲', output: '' });
+    expect(rest[1]).toEqual({ input: '', output: '回答'.repeat(200) });
   });
 
-  test('null summary renders turns only', () => {
-    const out = renderTranscript(null, turn(1, '正文'));
-    expect(out).not.toContain('前情提要');
-    expect(out).toContain('你: 问题1:正文');
-    expect(out).toContain('AI: 回答1:正文');
+  test('null summary yields turn entries only, no digest', () => {
+    const entries = transcriptEntries(null, turn(1, '正文'));
+    expect(entries).toEqual([
+      { input: '问题1:正文', output: '' },
+      { input: '', output: '回答1:正文' },
+    ]);
   });
 });

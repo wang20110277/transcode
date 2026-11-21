@@ -106,27 +106,30 @@ export async function compressSession(
 }
 
 /**
- * Render the resumed view: optional digest block (with the count of
- * compressed turns) plus the kept window as 你:/AI: lines. Tool activity and
- * system messages are not replayed.
+ * History entries for the restored view: optional digest first, then one
+ * entry per message — human turns as `input` (rule-framed highlight), AI
+ * replies as full-length `output`. Tool activity and system messages are
+ * not replayed. Rendering is the existing per-entry chat form.
  */
-export function renderTranscript(
+export function transcriptEntries(
   summary: string | null,
   messages: BaseMessage[],
   oldTurnsCount?: number,
-): string {
-  const cap = (text: string): string => (text.length > 120 ? `${text.slice(0, 120)}…` : text);
-  const lines: string[] = [];
+): { input: string; output: string }[] {
+  const entries: { input: string; output: string }[] = [];
   if (summary) {
-    lines.push(`📝 前情提要${oldTurnsCount ? `(旧 ${oldTurnsCount} 轮)` : ''}`, summary, '');
+    entries.push({
+      input: '',
+      output: `📝 前情提要${oldTurnsCount ? `(旧 ${oldTurnsCount} 轮)` : ''}\n${summary}`,
+    });
   }
   for (const message of messages) {
     const kind = message.getType();
-    if (kind === 'human') lines.push(`你: ${cap(contentText(message.content))}`);
+    if (kind === 'human') entries.push({ input: contentText(message.content), output: '' });
     else if (kind === 'ai') {
       const text = contentText(message.content);
-      if (text) lines.push(`AI: ${cap(text)}`);
+      if (text) entries.push({ input: '', output: text });
     }
   }
-  return lines.join('\n');
+  return entries;
 }

@@ -30,7 +30,7 @@ import {
   type SessionRecord,
 } from '../sessions/store.js';
 import { listProjectSessions, resolveResumeTarget } from '../sessions/resume.js';
-import { KEEP_TURNS, compressSession, renderTranscript, splitTurns } from '../sessions/compact.js';
+import { KEEP_TURNS, compressSession, transcriptEntries, splitTurns } from '../sessions/compact.js';
 import { walkFiles } from '../agent/tools/fs-utils.js';
 import { applyCompletion, filterFiles, mentionQuery } from './file-completion.js';
 import {
@@ -262,10 +262,11 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
       }
     }
     applyResume(finalRecord, inputLine);
-    addHistory({
-      input: inputLine,
-      output: renderTranscript(summaryRef.current, messagesRef.current, oldTurns || undefined),
-    });
+    // Restore in the original conversation form: each message becomes a
+    // history entry (rule-framed questions, full-length replies).
+    for (const entry of transcriptEntries(summaryRef.current, messagesRef.current, oldTurns || undefined)) {
+      addHistory(entry);
+    }
     dragFlush();
   };
 
@@ -770,10 +771,11 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
           saveSession(outcome.record);
           addHistory({
             input: trimmed,
-            output:
-              `已压缩:旧 ${turns.length - KEEP_TURNS} 轮提炼为前情提要,保留最近 ${KEEP_TURNS} 轮。\n` +
-              renderTranscript(summaryRef.current, messagesRef.current),
+            output: `已压缩:旧 ${turns.length - KEEP_TURNS} 轮提炼为前情提要,保留最近 ${KEEP_TURNS} 轮。`,
           });
+          for (const entry of transcriptEntries(summaryRef.current, messagesRef.current)) {
+            addHistory(entry);
+          }
         } else {
           addHistory({ input: trimmed, output: `⚠ 压缩失败(${outcome.error ?? '未知'}),会话保持原样。` });
         }
