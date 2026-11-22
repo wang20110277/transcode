@@ -17,6 +17,7 @@ import {
   type ToolKind,
   type ToolSession,
 } from './tools/index.js';
+import { estimateTokens } from '../sessions/compact.js';
 import { askRole, getRouting } from '../provider/provider.js';
 
 export type AgentEvent =
@@ -61,6 +62,8 @@ export type StopReason =
   | 'refusal';
 
 export interface AgentLoopOptions {
+  /** Context budget in tokens (CJK-calibrated estimate); undefined skips the in-turn gate. */
+  contextTokens?: number;
   model?: BaseChatModel;
   cwd: string;
   messages: BaseMessage[];
@@ -247,25 +250,6 @@ async function runMockTurn(
   return 'end_turn';
 }
 
-const COMPACT_DEFAULT_CHARS = 200_000;
-
-/**
- * Char estimate for the in-turn compaction gate. MUST include tool-call
- * arguments: a turn that repeatedly emits huge (possibly malformed) tool
- * payloads grows history invisibly if only message content is counted —
- * that blind spot once ballooned a session past the model's context window.
- */
-export function estimateMessagesChars(messages: BaseMessage[]): number {
-  return messages.reduce((sum, message) => {
-    const toolCalls = (message as AIMessage).tool_calls ?? [];
-    const argsChars = toolCalls.reduce(
-      (n, call) => n + JSON.stringify(call.args ?? '').length,
-      0,
-    );
-    return sum + JSON.stringify(message.content ?? '').length + argsChars + 200;
-  }, 0);
-}
-
 /** True when parseToolCalls fell back to {_raw}: the args were not valid JSON. */
 export function isMalformedToolArgs(args: Record<string, unknown>): boolean {
   return Object.keys(args).length === 1 && '_raw' in args;
@@ -387,9 +371,14 @@ export async function runAgentLoop(
   for (let turn = 0; turn < maxTurns; turn++) {
     if (options.signal?.aborted) return { stopReason: 'cancelled', messages };
 
-    // Auto-compaction before the request when over budget.
-    const compactChars = Number(process.env.TRANSCODE_COMPACT_CHARS ?? COMPACT_DEFAULT_CHARS);
-    if (compactChars > 0 && estimateMessagesChars(messages) > compactChars) {
+    // Auto-compaction before the request when over the token budget. The
+    // budget is resolved by the CALLER (REPL/ACP/dispatch, layered config)
+    // and passed here — the loop no longer reads env itself.
+    if (
+      options.contextTokens !== undefined &&
+      options.contextTokens > 0 &&
+      estimateTokens(messages) >= options.contextTokens
+    ) {
       await options.onEvent({ type: 'text', text: '\n⚠ 上下文接近上限，自动压缩历史…\n' });
       try {
         const compacted = await compactMessages(options.model, messages, options.systemPrompt);

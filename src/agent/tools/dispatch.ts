@@ -5,6 +5,7 @@ import type { AgentLoopOptions, AgentLoopResult } from '../loop.js';
 import type { AgentTool } from './types.js';
 import { createToolSession } from './session.js';
 import { createModel, getRouting } from '../../provider/provider.js';
+import { resolveContextTokens } from '../../sessions/compact.js';
 
 export interface DispatchDeps {
   runLoop?: (options: AgentLoopOptions) => Promise<AgentLoopResult>;
@@ -103,6 +104,9 @@ export function createDispatchAgentTool(deps: DispatchDeps = {}): AgentTool {
       const envTurns = Number(process.env.TRANSCODE_SUBAGENT_MAX_TURNS);
       const maxTurns = Number.isFinite(envTurns) && envTurns > 0 ? envTurns : 25;
 
+      // The sub-agent may run a DIFFERENT model (role profile) with its own
+      // window — resolve its budget, not the parent's (spec ruling #2).
+      const budget = resolveContextTokens(profile);
       const result = await runLoop!({
         model,
         cwd: ctx.session.cwd,
@@ -110,6 +114,7 @@ export function createDispatchAgentTool(deps: DispatchDeps = {}): AgentTool {
         systemPrompt: SUBAGENT_SYSTEM_PROMPT,
         tools: selected,
         maxTurns,
+        ...(budget.enabled && budget.tokens > 0 ? { contextTokens: budget.tokens } : {}),
         toolSession: createToolSession(ctx.session.cwd),
         onEvent: (event) => {
           // Forward sub-agent tool calls (prefixed) so the parent UI shows

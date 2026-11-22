@@ -39,7 +39,7 @@ import {
   type SessionRecord,
 } from '../sessions/store.js';
 import { listProjectSessions, resolveResumeTarget, splitResumeArgs } from '../sessions/resume.js';
-import { DEFAULT_KEEP_TURNS, compressSession, parseKeepCount, shouldAutoCompact, transcriptEntries, splitTurns } from '../sessions/compact.js';
+import { DEFAULT_KEEP_TURNS, compressSession, parseKeepCount, resolveContextTokens, shouldAutoCompact, transcriptEntries, splitTurns } from '../sessions/compact.js';
 import { walkFiles } from '../agent/tools/fs-utils.js';
 import { applyCompletion, filterFiles, mentionQuery } from './file-completion.js';
 import {
@@ -473,11 +473,13 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
   // turn, same runCompaction as /compact and resume. Circuit breaker stops
   // after 3 consecutive failures; auto failures warn once per session.
   const autoCompactIfNeeded = async (): Promise<void> => {
-    const cfg = normalizeAutoCompact(loadConfig().autoCompact);
-    if (!cfg.enabled || !conversationRef.current) return;
+    if (!conversationRef.current) return;
     if (process.env.TRANSCODE_MOCK === '1') return;
     if (autoCompactFailuresRef.current >= 3) return;
-    if (!shouldAutoCompact(messagesRef.current, cfg)) return;
+    const budget = resolveContextTokens(ctx.modelId);
+    if (!budget.enabled || budget.tokens <= 0) return;
+    if (!shouldAutoCompact(messagesRef.current, { contextTokens: budget.tokens })) return;
+    const cfg = normalizeAutoCompact(loadConfig().autoCompact);
     try {
       // Digest streams into the live region; it lands as its own entry here
       // (before the turn's echo) and never mixes into the turn entry.
@@ -575,6 +577,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
           copy.splice(insertAt, 0, new SystemMessage(`【前情提要】\n${summaryRef.current}`));
           loopMessages = copy;
         }
+        const turnBudget = resolveContextTokens(ctx.modelId);
         const result = await runAgentLoop({
           model: provider?.model,
           cwd: process.cwd(),
@@ -583,6 +586,9 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
             ? `${systemPrompt}\n\nPLAN MODE: explore read-only, then output a numbered implementation plan with exact files and changes. End with the line PLAN READY. Do not modify anything.`
             : systemPrompt,
           planMode: options?.planMode === true,
+          ...(turnBudget.enabled && turnBudget.tokens > 0
+            ? { contextTokens: turnBudget.tokens }
+            : {}),
           signal: controller.signal,
           toolSession: toolSessionRef.current,
           onEvent: event => {

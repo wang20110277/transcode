@@ -11,6 +11,7 @@ import { runAgentLoop, type AgentEvent, type PermissionRequest } from '../agent/
 import { createToolSession, type ToolSession } from '../agent/tools/index.js';
 import { getPermissionMode } from '../agent/permission.js';
 import { buildSystemPrompt, loadProjectContext } from '../agent/system-prompt.js';
+import { resolveContextTokens } from '../sessions/compact.js';
 import {
   RPC_ERRORS,
   RpcError,
@@ -133,11 +134,13 @@ export class AcpSession {
 
       this.messages.push(new HumanMessage(text));
 
+      const budget = resolveContextTokens(this.modelSpec);
       const result = await runAgentLoop({
         model: provider?.model,
         cwd: this.cwd,
         messages: this.messages,
         systemPrompt,
+        ...(budget.enabled && budget.tokens > 0 ? { contextTokens: budget.tokens } : {}),
         signal,
         toolSession: this.toolSession,
         onEvent: (event) => this.forwardEvent(event),

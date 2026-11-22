@@ -208,7 +208,7 @@ describe('runAgentLoop', () => {
   });
 
   test('auto-compacts the conversation when the char budget is exceeded', async () => {
-    process.env.TRANSCODE_COMPACT_CHARS = '1200';
+    // Migrated from TRANSCODE_COMPACT_CHARS: budget now arrives via options.
     const events: AgentEvent[] = [];
     const chatty: AgentTool = {
       ...fakeTool,
@@ -225,26 +225,47 @@ describe('runAgentLoop', () => {
       cwd: '/tmp',
       messages: [],
       systemPrompt: 'test',
+      contextTokens: 300, // ~1200 chars folded, now explicit tokens
       tools: [chatty],
       onEvent: (event) => events.push(event),
     });
 
-    try {
-      const text = events
-        .filter((event) => event.type === 'text')
-        .map((event) => (event as { text: string }).text)
-        .join('');
-      expect(text).toContain('自动压缩');
-      expect(
-        result.messages.some((message) =>
-          message.content.toString().includes('[conversation summary]'),
-        ),
-      ).toBe(true);
-      // The compacted history must not start with an orphaned tool message.
-      expect(result.messages[1]?.getType()).not.toBe('tool');
-    } finally {
-      delete process.env.TRANSCODE_COMPACT_CHARS;
-    }
+    const text = events
+      .filter((event) => event.type === 'text')
+      .map((event) => (event as { text: string }).text)
+      .join('');
+    expect(text).toContain('自动压缩');
+    expect(
+      result.messages.some((message) =>
+        message.content.toString().includes('[conversation summary]'),
+      ),
+    ).toBe(true);
+    // The compacted history must not start with an orphaned tool message.
+    expect(result.messages[1]?.getType()).not.toBe('tool');
+  });
+
+  test('未传 contextTokens → 轮内闸跳过(env 不再直读)', async () => {
+    const events: AgentEvent[] = [];
+    const chatty: AgentTool = {
+      ...fakeTool,
+      isMutating: false,
+      async execute() {
+        return `large chunk ${'x'.repeat(400)} done`;
+      },
+    };
+    const result = await runAgentLoop({
+      model: scriptedModel(
+        Array.from({ length: 10 }, (_, i) => ({ tool: 'fake' as const, args: JSON.stringify({ n: i }) })),
+      ),
+      cwd: '/tmp',
+      messages: [],
+      systemPrompt: 'test',
+      tools: [chatty],
+      onEvent: (event) => events.push(event),
+    });
+    const text = events.filter((event) => event.type === 'text').map((event) => (event as { text: string }).text).join('');
+    expect(text).not.toContain('自动压缩');
+    expect(result.messages.length).toBeGreaterThan(5);
   });
 
   test('plan mode denies mutations and allows read-only exploration', async () => {
@@ -691,21 +712,6 @@ describe('runAgentLoop', () => {
   });
 });
 
-describe('context estimator sees tool-call args', () => {
-  test('estimateMessagesChars 计入 tool_calls 参数(巨型参数不再隐形)', async () => {
-    const { AIMessage } = await import('@langchain/core/messages');
-    const { estimateMessagesChars } = await import('./loop.js');
-    const messages = [
-      new AIMessage({
-        content: '写文件',
-        tool_calls: [
-          { id: 'c1', name: 'write_file', args: { content: 'x'.repeat(250_000) } },
-        ],
-      }),
-    ];
-    expect(estimateMessagesChars(messages)).toBeGreaterThan(200_000);
-  });
-});
 
 describe('malformed tool-call breaker', () => {
   test('isMalformedToolArgs:仅 _raw 键为真,正常/空参数为假', async () => {
