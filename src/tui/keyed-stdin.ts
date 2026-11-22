@@ -17,6 +17,26 @@ import { EventEmitter } from 'node:events';
  * addListener/removeListener('readable'), read(), setEncoding(),
  * setRawMode(), ref(), unref(), isTTY.
  */
+/**
+ * Split a stdin burst into discrete keys: one escape sequence per key
+ * (with any trailing plain characters re-queued — a glued "\x1b[Ax\r"
+ * must NOT swallow the x and the Enter), one character otherwise.
+ */
+export function splitKeys(chunk: string): string[] {
+  if (!chunk) return [];
+  if (chunk.charCodeAt(0) !== 0x1b) return [...chunk];
+  // Escape sequence: lone ESC, ESC+single char, or CSI/SS3 ending at the
+  // first letter/~ (parameter bytes 0x30-0x3F, intermediates 0x20-0x2F).
+  // Lone ESC, or ESC+char (terminals send Alt-modified keys this way —
+  // keep as one key). CSI/SS3 sequences end at the first letter/~.
+  let end = 2;
+  if (chunk[1] === '[' || chunk[1] === 'O') {
+    while (end < chunk.length && !/[a-zA-Z~]/.test(chunk[end]!)) end++;
+    end = Math.min(end + 1, chunk.length);
+  }
+  return [chunk.slice(0, end), ...[...chunk.slice(end)]];
+}
+
 class KeyedStdin extends EventEmitter {
   readonly isTTY = true;
   private queue: string[] = [];
@@ -29,15 +49,7 @@ class KeyedStdin extends EventEmitter {
     this.realStdin = realStdin;
     realStdin.setEncoding('utf8');
     realStdin.on('data', (chunk: string) => {
-      if (!chunk) return;
-      if (chunk.charCodeAt(0) === 0x1b) {
-        // Escape sequences arrive atomically — keep as one key.
-        this.pushKey(chunk);
-        return;
-      }
-      // Plain characters: enqueue one key per character (for..of splits
-      // by code point, so multi-byte input (e.g. CJK) stays intact).
-      for (const ch of chunk) this.pushKey(ch);
+      for (const key of splitKeys(chunk)) this.pushKey(key);
     });
   }
 
