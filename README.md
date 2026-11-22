@@ -2,7 +2,7 @@
 
 多模型 AI 编码 Agent CLI。当前 MVP 的目标是：**作为本地 Agent 被 transonce、multica 等客户端通过 ACP 调用**。
 
-- 终端侧：Ink REPL（命令：`help` / `models` / `mode` / `route` / `init` / `clear` / `exit`）
+- 终端侧：Ink REPL（命令：`help` / `models` / `mode` / `route` / `init` / `memory` / `remember` / `forget` / `clear` / `exit`）
 - Agent 侧：`transcode acp` 启动 ACP v1 stdio 服务，供 transonce、multica 等客户端调用
 - 模型侧：档案（Profile）+ 角色（Role）路由——一个模型 ID 对应一个地址，不同任务可派发不同模型（含子 Agent）
 - 工具侧：`read_file` / `write_file` / `edit_file` / `glob` / `grep` / `bash` / `todo_write` / `ask_model` / `dispatch_agent`
@@ -230,6 +230,15 @@ ACP 默认权限模式是 `ask`：写文件、改文件、执行命令前会向�
 ## 上下文
 
 每次 turn 按优先级加载 workspace 下的 `TRANS.md`、`AGENTS.md`、`CLAUDE.md`、`TRANSCODE.md`、`.transcode/AGENTS.md`（存在时）注入系统提示。REPL 里 `/init` 可让 Agent 自行探索仓库并生成 `TRANS.md`（项目背景 / 命令 / 架构 / 约定）。
+
+## 用户记忆
+
+跨会话、跨项目记住你的偏好与对 Agent 的纠正，存放在 `~/.transcode/`：
+
+- **全局指令** `~/.transcode/TRANS.md`——手写一次、所有项目生效（"所有项目用 bun"、"commit 用中文"）
+- **自动记忆** `~/.transcode/memory/`——一条事实一个文件，`MEMORY.md` 是索引。Agent 有 `memory_save` / `memory_delete` 工具：你纠正它的行为或表达持久偏好时，它会自己记下来；也可以直接 `/remember <text>` 手动存、`/forget <name>` 删、`/memory` 查看
+
+注入预算 12k 字符，超预算整条省略最低优先级（user > feedback > project > reference）并在提示中注明。记忆目录文件是事实源，`MEMORY.md` 删除后会自动重建。测试与隔离用环境变量 `TRANSCODE_USER_DIR` 覆盖根目录。
 
 ## ACP 协议
 

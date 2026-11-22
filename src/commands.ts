@@ -1,7 +1,18 @@
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import type { ModelId } from './provider/provider.js';
 import { getAvailableModels } from './provider/provider.js';
 import { getPermissionMode, PERMISSION_MODES, setPermissionMode } from './agent/permission.js';
 import { getRouting, resolveRole, setRouting } from './provider/provider.js';
+import {
+  deleteMemory,
+  globalInstructionsPath,
+  loadUserMemory,
+  memoryDir,
+  renderMemoryIndex,
+  saveMemory,
+  userMemoryRoot,
+} from './agent/memory.js';
 
 export interface CommandContext {
   /** Registry id (deepseek) or provider:model spec (deepseek:deepseek-reasoner). */
@@ -20,6 +31,28 @@ export interface Command {
   description: string;
   usage?: string;
   execute: (args: string[], ctx: CommandContext) => CommandResult | Promise<CommandResult>;
+}
+
+/** /remember slug: ascii words (≤4) kebab-cased; pure non-ascii text falls back to its first 8 chars. */
+function slugFromText(text: string): string {
+  const ascii = text
+    .split(/\s+/)
+    .slice(0, 4)
+    .join(' ')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return ascii || text.replace(/\s+/g, '').slice(0, 8);
+}
+
+/** Appends -2, -3, … until the memory file name is free. */
+function uniqueMemoryName(base: string): string {
+  let candidate = base;
+  let suffix = 2;
+  while (existsSync(path.join(memoryDir(), `${candidate}.md`))) {
+    candidate = `${base}-${suffix++}`;
+  }
+  return candidate;
 }
 
 const commands: Command[] = [
@@ -48,6 +81,52 @@ const commands: Command[] = [
     execute: () => ({
       output: 'Analyzing the project and writing TRANS.md…',
     }),
+  },
+  {
+    name: 'memory',
+    description: 'Show user memories (global instructions + memory index)',
+    execute: async () => {
+      const memory = await loadUserMemory();
+      const lines: string[] = [`Memory root: ${userMemoryRoot()}`];
+      lines.push(
+        memory.globalInstructions
+          ? `Global instructions: ${globalInstructionsPath()} (${memory.globalInstructions.split('\n').length} lines)`
+          : `Global instructions: none yet — create ${globalInstructionsPath()}`,
+      );
+      if (memory.entries.length > 0) {
+        lines.push('Memories:', ...renderMemoryIndex(memory.entries).trim().split('\n'));
+      } else {
+        lines.push('No memories yet. Use /remember <text> to save one.');
+      }
+      if (memory.omitted.length > 0) {
+        lines.push(`(over budget, omitted: ${memory.omitted.join(', ')})`);
+      }
+      lines.push('Usage: /remember <text> — save a memory; /forget <name> — delete one.');
+      return { output: lines.join('\n') };
+    },
+  },
+  {
+    name: 'remember',
+    description: 'Save a user memory (/remember <text>)',
+    execute: async (args) => {
+      const text = args.join(' ').trim();
+      if (!text) return { output: 'Usage: /remember <text>' };
+      const name = uniqueMemoryName(slugFromText(text));
+      const entry = await saveMemory({ name, type: 'user', content: text });
+      return { output: `Saved memory "${entry.name}".` };
+    },
+  },
+  {
+    name: 'forget',
+    description: 'Delete a user memory (/forget <name>)',
+    execute: async (args) => {
+      const name = args[0]?.trim();
+      if (!name) return { output: 'Usage: /forget <name>' };
+      const removed = await deleteMemory(name);
+      return removed
+        ? { output: `Forgot ${name}.` }
+        : { output: `No memory named '${name}'.` };
+    },
   },
   {
     name: 'mode',
