@@ -421,7 +421,7 @@ function buildChatModel(
   resolved: ResolvedModel,
   apiKey: string,
   baseUrl: string | undefined,
-  tokens: number,
+  tokens: number | undefined,
 ): BaseChatModel {
   if (resolved.provider === 'anthropic') {
     // Only use bearer auth when there is no explicit ANTHROPIC_API_KEY, so a
