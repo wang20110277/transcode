@@ -32,3 +32,19 @@ export function summaryLine(stats: TurnStats): string {
   const markers = `${stats.ok}✓${stats.fail > 0 ? ` ${stats.fail}✗` : ''}`;
   return `⚙ ${stats.calls} tool calls · ${parts.join(' ')} · ${markers}`;
 }
+
+/**
+ * Render a collapsed turn's tool log. Non-verbose: the summary line plus a
+ * "… +N lines (ctrl+o to expand)" affordance; verbose (ctrl+o): the hidden
+ * detail lines become visible so nothing is permanently unreachable.
+ */
+export function renderTurnLog(summary: string, hiddenLines: string[], verbose: boolean): string {
+  if (hiddenLines.length === 0) return summary;
+  if (verbose) {
+    return `${summary}\n(ctrl+o to collapse)${hiddenLines.join('')}`;
+  }
+  const count = hiddenLines
+    .flatMap((line) => line.split('\n'))
+    .filter((line) => line.trim().length > 0).length;
+  return `${summary}\n… +${count} lines (ctrl+o to expand)`;
+}

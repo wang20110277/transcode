@@ -50,13 +50,15 @@ import { resolveSubmitInput } from './submit.js';
 import { submitSearchApiKey } from './search-setup.js';
 import { historyRule } from './history-rule.js';
 import { renderDiff } from './diff-render.js';
-import { createTurnStats, recordCall, shouldCollapse, summaryLine } from './turn-summary.js';
+import { createTurnStats, recordCall, renderTurnLog, shouldCollapse, summaryLine } from './turn-summary.js';
 import { buildSystemPrompt, INIT_PROMPT, loadProjectContext } from '../agent/system-prompt.js';
 import { HumanMessage, SystemMessage, type BaseMessage } from '@langchain/core/messages';
 
 interface HistoryEntry {
   input: string;
   output: string;
+  /** Tool-log detail hidden behind the collapse summary (ctrl+o reveals). */
+  hiddenLines?: string[];
 }
 
 type PromptPhase =
@@ -147,6 +149,22 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
 
   const addHistory = useCallback((entry: HistoryEntry) => {
     setHistory(prev => [...prev, entry]);
+  }, []);
+
+  /** ctrl+o verbose view: collapsed turns show their hidden tool-log detail. */
+  const [verboseTools, setVerboseTools] = useState(false);
+
+  const attachHiddenLines = useCallback((lines: string[]) => {
+    setHistory(prev => {
+      if (prev.length === 0 || lines.length === 0) return prev;
+      const next = [...prev];
+      const last = next[next.length - 1];
+      next[next.length - 1] = {
+        ...last,
+        hiddenLines: [...(last.hiddenLines ?? []), ...lines],
+      };
+      return next;
+    });
   }, []);
 
   // ---- chat state ----
@@ -513,9 +531,11 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         });
 
         // Collapse long turns into one summary line; short turns stay expanded.
+        // Collapsed detail is kept (hiddenLines) so ctrl+o can reveal it.
         if (shouldCollapse(stats)) {
           const line = summaryLine(stats);
           if (line) appendChatOutput(`\n${line}`);
+          attachHiddenLines(bufferedLines);
         } else {
           for (const line of bufferedLines) appendChatOutput(line);
         }
@@ -1013,6 +1033,11 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
       // eslint-disable-next-line no-console
       console.error(`CB ${JSON.stringify(ch)} ret=${key.return} esc=${key.escape}`);
     }
+    // ctrl+o: toggle verbose tool logs (expand/collapse every turn).
+    if (key.ctrl && (ch === 'o' || ch === 'O')) {
+      setVerboseTools(v => !v);
+      return;
+    }
     // @-mention popup: Esc dismisses it instead of exiting the app.
     if (key.escape && mentionActive && mentionCandidates.length > 0) {
       setMentionDismissed(true);
@@ -1339,7 +1364,11 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
           )}
           {entry.output && (
             <Box marginLeft={2}>
-              <Text>{entry.output}</Text>
+              <Text>
+                {entry.hiddenLines?.length
+                  ? renderTurnLog(entry.output, entry.hiddenLines, verboseTools)
+                  : entry.output}
+              </Text>
             </Box>
           )}
         </Box>

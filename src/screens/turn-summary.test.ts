@@ -39,3 +39,26 @@ describe('turn summary', () => {
     expect(shouldCollapse(long)).toBe(true);
   });
 });
+
+describe('renderTurnLog', () => {
+  test('折叠:summary + "… +N lines (ctrl+o to expand)",N 数实际行数', async () => {
+    const { renderTurnLog } = await import('./turn-summary.js');
+    const hidden = ['\n⚙ read_file a.ts ✓', '\n⚙ bash npm test ✓\nextra line', '\n⚙ grep foo ✓'];
+    expect(renderTurnLog('⚙ 3 tool calls · …', hidden, false)).toBe(
+      '⚙ 3 tool calls · …\n… +4 lines (ctrl+o to expand)',
+    );
+  });
+
+  test('展开:明细可见 + "(ctrl+o to collapse)" 提示', async () => {
+    const { renderTurnLog } = await import('./turn-summary.js');
+    const out = renderTurnLog('S', ['\n⚙ read_file a.ts ✓', '\n⚙ bash npm test ✓'], true);
+    expect(out).toContain('read_file a.ts');
+    expect(out).toContain('bash npm test');
+    expect(out).toContain('(ctrl+o to collapse)');
+  });
+
+  test('无明细时原样返回 summary', async () => {
+    const { renderTurnLog } = await import('./turn-summary.js');
+    expect(renderTurnLog('S', [], false)).toBe('S');
+  });
+});
