@@ -117,6 +117,15 @@ const commands: Command[] = [
     },
   },
   {
+    name: 'search',
+    description: 'Configure web search provider + key (tavily|brave)',
+    // Intercepted by the REPL before command dispatch (like /models): the
+    // setup runs an interactive provider → key → live-test flow.
+    execute: () => ({
+      output: 'Configuring web search…',
+    }),
+  },
+  {
     name: 'forget',
     description: 'Delete a user memory (/forget <name>)',
     execute: async (args) => {

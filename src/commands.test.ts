@@ -148,3 +148,12 @@ describe('executeCommand error containment', () => {
     expect(result.output).toContain('EACCES');
   });
 });
+
+describe('search command registration', () => {
+  test('is registered so /help lists it', () => {
+    const search = findCommand('search');
+    expect(search).toBeDefined();
+    expect(search?.description.length).toBeGreaterThan(0);
+    expect(getCommands().map((c) => c.name)).toContain('search');
+  });
+});

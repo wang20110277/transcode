@@ -18,7 +18,13 @@ import {
   type ModelId,
 } from '../provider/provider.js';
 import { loadConfig, normalizeAutoCompact } from '../config.js';
-import { webSearchConfigWarning } from '../provider/web-search.js';
+import {
+  checkWebSearch,
+  normalizeWebSearchConfig,
+  saveWebSearchConfig,
+  webSearchConfigWarning,
+  type WebSearchConfig,
+} from '../provider/web-search.js';
 import { runAgentLoop, type PermissionRequest } from '../agent/loop.js';
 import { createToolSession } from '../agent/tools/index.js';
 import { getPermissionMode } from '../agent/permission.js';
@@ -62,7 +68,13 @@ type PromptPhase =
   | 'model_apikey'
   | 'model_check'
   | 'permission'
-  | 'session_select';
+  | 'session_select'
+  | 'search_provider'
+  | 'search_apikey'
+  | 'search_check';
+
+/** Providers offered by the /search setup flow (mirrors normalizeWebSearchConfig). */
+const SEARCH_PROVIDERS: WebSearchConfig['provider'][] = ['tavily', 'brave'];
 
 interface REPLProps {
   ctx: CommandContext;
@@ -101,6 +113,9 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
     setPendingModel(id);
   };
   const [modelCursor, setModelCursor] = useState(0);
+  // /search setup flow: cursor over SEARCH_PROVIDERS, ref carries the pick.
+  const [searchCursor, setSearchCursor] = useState(0);
+  const searchProviderRef = useRef<WebSearchConfig['provider']>('tavily');
   // session_select picker: cursor over the project-scoped session snapshot.
   const [sessionCursor, setSessionCursor] = useState(0);
   // Model selection flow: vendor → model → key (reused if saved) → check.
@@ -636,6 +651,38 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
     [applyModelSwitch, addHistory, commitInput, dragFlush],
   );
 
+  // /search key step: validate with a real query, persist only on success.
+  const handleSearchApiKey = useCallback(
+    async (value: string) => {
+      const provider = searchProviderRef.current;
+      const saved = normalizeWebSearchConfig(loadConfig().webSearch);
+      const apiKey = value.trim() || (saved?.provider === provider ? saved.apiKey : '');
+      if (!apiKey) {
+        addHistory({ input: '••••••••', output: 'API key 不能为空。(Esc 取消)' });
+        return;
+      }
+      setPhase('search_check');
+      addHistory({ input: '••••••••', output: `正在测试 ${provider} key…` });
+      const result = await checkWebSearch({ provider, apiKey });
+      if (result.ok) {
+        saveWebSearchConfig(provider, apiKey);
+        addHistory({
+          input: '',
+          output: `✓ ${provider} 连通正常(首条结果:${result.firstTitle})。web_search 已启用。`,
+        });
+        setPhase('idle');
+      } else {
+        addHistory({
+          input: '',
+          output: `✗ 测试失败:${result.error}\n请重新输入 key(Esc 取消)`,
+        });
+        setPhase('search_apikey');
+      }
+      dragFlush();
+    },
+    [addHistory, dragFlush],
+  );
+
   const handleApiKey = useCallback(
     async (value: string) => {
       // Key-first vendor setup: the key unlocks the live model list before
@@ -726,6 +773,14 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
       return;
     }
 
+    if (phase === 'search_apikey') {
+      await handleSearchApiKey(trimmed);
+      commitInput('');
+      return;
+    }
+
+    if (phase === 'search_check') return;
+
     if (phase === 'custom_baseurl') {
       if (!/^https?:\/\//.test(trimmed)) {
         addHistory({ input: trimmed, output: '地址需以 http:// 或 https:// 开头。' });
@@ -760,6 +815,15 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
     if (cmdName === 'models') {
       addHistory({ input: trimmed, output: 'Select a model (↑↓ to navigate, Enter to select):' });
       enterModelSelect();
+      commitInput('');
+      dragFlush();
+      return;
+    }
+
+    if (cmdName === 'search') {
+      addHistory({ input: trimmed, output: 'Select a search provider (↑↓ to navigate, Enter to select):' });
+      setSearchCursor(0);
+      setPhase('search_provider');
       commitInput('');
       dragFlush();
       return;
@@ -999,6 +1063,28 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
       return;
     }
 
+    if (phase === 'search_provider') {
+      if (key.upArrow) {
+        setSearchCursor((c) => (c - 1 + SEARCH_PROVIDERS.length) % SEARCH_PROVIDERS.length);
+        return;
+      }
+      if (key.downArrow) {
+        setSearchCursor((c) => (c + 1) % SEARCH_PROVIDERS.length);
+        return;
+      }
+      if (key.return) {
+        const provider = SEARCH_PROVIDERS[searchCursor];
+        searchProviderRef.current = provider;
+        const saved = normalizeWebSearchConfig(loadConfig().webSearch);
+        const hint = saved?.provider === provider ? '(Enter 沿用已存 key)' : '';
+        addHistory({ input: '', output: `搜索商:${provider}。输入 API key ${hint}:` });
+        setPhase('search_apikey');
+        commitInput('');
+        return;
+      }
+      return;
+    }
+
     if (phase === 'model_select') {
       if (key.return) {
         const selected = models[modelCursor];
@@ -1227,6 +1313,8 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
             ? keyHint ? `apikey (回车沿用 ${keyHint})> ` : 'apikey> '
             : phase === 'vendor_apikey'
               ? 'apikey> '
+            : phase === 'search_apikey'
+              ? 'search apikey> '
             : phase === 'permission'
               ? 'allow?> '
               : '> ';
@@ -1288,6 +1376,19 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
             </Box>
           ))}
           <Text color="gray" dimColor>↑↓ 选择厂商 · Enter 进入模型列表</Text>
+        </Box>
+      )}
+
+      {phase === 'search_provider' && (
+        <Box flexDirection="column" marginLeft={2}>
+          {SEARCH_PROVIDERS.map((p, i) => (
+            <Box key={p}>
+              <Text color={i === searchCursor ? 'cyan' : undefined}>
+                {i === searchCursor ? '❯ ' : '  '}{p}
+              </Text>
+            </Box>
+          ))}
+          <Text color="gray" dimColor>↑↓ 选择搜索商 · Enter 下一步 · Esc 取消</Text>
         </Box>
       )}
 

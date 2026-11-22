@@ -104,3 +104,65 @@ describe('runWebSearch adapters', () => {
     ).rejects.toThrow(/nope/);
   });
 });
+
+describe('web search setup helpers', () => {
+  test('saveWebSearchConfig:写 webSearch 段且不覆盖其它段', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const path = await import('node:path');
+    const { loadConfig } = await import('../config.js');
+    const { saveWebSearchConfig } = await import('./web-search.js');
+    const root = mkdtempSync(path.join(tmpdir(), 'transcode-ws-save-'));
+    const configPath = path.join(root, 'config.json');
+    writeFileSync(configPath, JSON.stringify({ apiKeys: { glm: 'g-1' }, model: 'glm' }));
+    process.env.TRANSCODE_CONFIG_PATH = configPath;
+    try {
+      saveWebSearchConfig('tavily', 'tvly-3');
+      const saved = JSON.parse((await import('node:fs')).readFileSync(configPath, 'utf8'));
+      expect(saved).toEqual({
+        apiKeys: { glm: 'g-1' },
+        model: 'glm',
+        webSearch: { provider: 'tavily', apiKey: 'tvly-3' },
+      });
+      expect(loadConfig().webSearch).toEqual({ provider: 'tavily', apiKey: 'tvly-3' });
+    } finally {
+      delete process.env.TRANSCODE_CONFIG_PATH;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('checkWebSearch 成功:固定测试查询,首条 title 返回', async () => {
+    const { checkWebSearch } = await import('./web-search.js');
+    let seenBody = '';
+    const result = await checkWebSearch(
+      { provider: 'tavily', apiKey: 'tvly-8' },
+      (async (_input: any, init?: any) => {
+        seenBody = String(init?.body ?? '');
+        return new Response(
+          JSON.stringify({ results: [{ title: 'Alive', url: 'https://x/1', content: 's' }] }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }) as typeof fetch,
+    );
+    expect(result).toEqual({ ok: true, firstTitle: 'Alive' });
+    expect(JSON.parse(seenBody).query).toBe('transcode connectivity check');
+    expect(JSON.parse(seenBody).max_results).toBe(1);
+  });
+
+  test('checkWebSearch 失败:API 报错进 error,不抛异常', async () => {
+    const { checkWebSearch } = await import('./web-search.js');
+    const result = await checkWebSearch(
+      { provider: 'brave', apiKey: 'bad' },
+      (async () =>
+        new Response('{"error":"Invalid key"}', {
+          status: 401,
+          headers: { 'content-type': 'application/json' },
+        })) as typeof fetch,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('401');
+      expect(result.error).toContain('Invalid key');
+    }
+  });
+});

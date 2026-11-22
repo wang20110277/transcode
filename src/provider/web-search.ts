@@ -106,6 +106,20 @@ export async function runWebSearch(
 
 /** Persist provider+key into the config's webSearch section, preserving other keys. */
 export function saveWebSearchConfig(provider: WebSearchConfig['provider'], apiKey: string): void {
-  const config = loadConfig();
-  saveConfig({ ...config, webSearch: { provider, apiKey } });
+  saveConfig({ ...loadConfig(), webSearch: { provider, apiKey } });
+}
+
+export type WebSearchCheck = { ok: true; firstTitle: string } | { ok: false; error: string };
+
+/** Live connectivity test for the /search flow: one real query, never throws. */
+export async function checkWebSearch(
+  cfg: WebSearchConfig,
+  fetchImpl: typeof fetch = globalThis.fetch,
+): Promise<WebSearchCheck> {
+  try {
+    const hits = await runWebSearch(cfg, 'transcode connectivity check', 1, fetchImpl);
+    return { ok: true, firstTitle: hits[0]?.title ?? '(empty result set — key works)' };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
 }

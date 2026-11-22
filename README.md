@@ -2,10 +2,10 @@
 
 多模型 AI 编码 Agent CLI。当前 MVP 的目标是：**作为本地 Agent 被 transonce、multica 等客户端通过 ACP 调用**。
 
-- 终端侧：Ink REPL（命令：`help` / `models` / `mode` / `route` / `init` / `memory` / `remember` / `forget` / `clear` / `exit`）
+- 终端侧：Ink REPL（命令：`help` / `models` / `mode` / `route` / `init` / `memory` / `remember` / `forget` / `search` / `clear` / `exit`）
 - Agent 侧：`transcode acp` 启动 ACP v1 stdio 服务，供 transonce、multica 等客户端调用
 - 模型侧：档案（Profile）+ 角色（Role）路由——一个模型 ID 对应一个地址，不同任务可派发不同模型（含子 Agent）
-- 工具侧：`read_file` / `write_file` / `edit_file` / `glob` / `grep` / `bash` / `todo_write` / `ask_model` / `dispatch_agent`
+- 工具侧：`read_file` / `write_file` / `edit_file` / `glob` / `grep` / `bash` / `todo_write` / `memory_save` / `web_fetch` / `web_search` / `ask_model` / `dispatch_agent`
 
 ## 环境要求
 
@@ -239,6 +239,15 @@ ACP 默认权限模式是 `ask`：写文件、改文件、执行命令前会向�
 - **自动记忆** `~/.transcode/memory/`——一条事实一个文件，`MEMORY.md` 是索引。Agent 有 `memory_save` / `memory_delete` 工具：你纠正它的行为或表达持久偏好时，它会自己记下来；也可以直接 `/remember <text>` 手动存、`/forget <name>` 删、`/memory` 查看
 
 注入预算 12k 字符，超预算整条省略最低优先级（user > feedback > project > reference）并在提示中注明。记忆目录文件是事实源，`MEMORY.md` 删除后会自动重建。测试与隔离用环境变量 `TRANSCODE_USER_DIR` 覆盖根目录。
+
+## 联网工具
+
+- **`web_fetch`**：零配置开箱即用。抓 URL 返回可读文本（HTML 剥离为文本 + 标题，text/json 原样，二进制给类型/大小提示）；支持 gbk/gb2312 页面解码，512KB / 20k 字符上限，15s 超时
+- **`web_search`**：搜索商由你配置，transcode 只提供实现（厂商无关，GLM/DeepSeek 路由下同样可用）。支持 Tavily 与 Brave，配置两条路：
+  - **`/search` 交互**：选搜索商 → 输 key → 发真实测试查询验证 → 自动写入配置
+  - **手改 JSON**：`~/.transcode.json` 的 `webSearch: { provider: "tavily" | "brave", apiKey: "…" }`，改完下一轮生效
+
+未配置时 `web_search` 对模型不可见（不浪费轮次）；配置存在但无效会在启动时提示一行。请求使用诚实 UA（`Mozilla/5.0 (compatible; transcode/<version>)`），部分强防护站点可能 403。全局安装（bun 运行时）的联网请求自动识别 `HTTP(S)_PROXY`；自建 Node dist 路径暂不支持代理。
 
 ## ACP 协议
 
