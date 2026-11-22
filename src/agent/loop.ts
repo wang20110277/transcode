@@ -274,6 +274,9 @@ export function isMalformedToolArgs(args: Record<string, unknown>): boolean {
 /** Consecutive all-malformed turns tolerated before the breaker stops the loop. */
 const MALFORMED_TOOL_CALL_BREAKER = 3;
 
+/** Auto-retries for provider empty responses (thinking-model silent stops). */
+const EMPTY_RESPONSE_RETRIES = 2;
+
 const MALFORMED_GUIDANCE =
   'Your last tool calls had malformed JSON arguments and were never executed. ' +
   'Do NOT retry the same payload. Write the file in smaller sections, or use a ' +
@@ -426,14 +429,18 @@ export async function runAgentLoop(
     // (observed on glm-5.3). Retry the same messages once instead of
     // silently losing the reply; if it repeats, end loudly.
     if (toolCalls.length === 0 && !text) {
-      if (sawToolRound && emptyResponseRetries < 1) {
+      if (sawToolRound && emptyResponseRetries < EMPTY_RESPONSE_RETRIES) {
         emptyResponseRetries++;
+        await options.onEvent({
+          type: 'text',
+          text: `\n⟳ 模型空响应,自动重试(第 ${emptyResponseRetries}/${EMPTY_RESPONSE_RETRIES} 轮)…`,
+        });
         continue; // re-request the same messages; push nothing
       }
       if (sawToolRound) {
         await options.onEvent({
           type: 'text',
-          text: '\n⚠ 模型返回了空响应(思考通道无正文),重试仍为空——请重发本轮或换个问法。',
+          text: `\n⚠ 模型连续 ${EMPTY_RESPONSE_RETRIES + 1} 次返回空响应(重试后仍为空)——请重发本轮或换个问法。`,
         });
       }
       messages.push(new AIMessage({ content: '', tool_calls: [] }));

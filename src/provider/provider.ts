@@ -2,6 +2,7 @@ import { ChatOpenAI } from '@langchain/openai';
 import { ChatAnthropic } from '@langchain/anthropic';
 import { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { loadConfig, saveConfig } from '../config.js';
+import { toolCallArgsSafeFetch } from './openai-compat.js';
 
 export type ModelId =
   | 'opus'
@@ -439,7 +440,7 @@ function buildChatModel(
       // every request. Strict Anthropic-compatible gateways reject that
       // ("top_p is in (0, 1.0]"), so drop both keys unless explicitly set.
       invocationKwargs: { top_k: undefined, top_p: undefined },
-      maxRetries: 1,
+      maxRetries: 2, // transport instability (429/5xx) with SDK backoff
     });
   }
   if (!baseUrl && /custom/.test(resolved.id)) {
@@ -450,8 +451,14 @@ function buildChatModel(
     openAIApiKey: apiKey,
     temperature: 0,
     maxTokens: tokens,
-    maxRetries: 1,
-    configuration: baseUrl ? { baseURL: baseUrl } : undefined,
+    maxRetries: 2, // transport instability (429/5xx) with SDK backoff
+    // GLM 等 OpenAI 兼容网关要求 assistant 历史 tool_calls 的 arguments 为
+    // 字符串;LangChain 以对象出站会在第二轮起被网关以 1210 拒绝并表现为
+    // 空流(多轮工具调用全部丢失)。出站前改写,合规网关零影响。
+    configuration: {
+      ...(baseUrl ? { baseURL: baseUrl } : {}),
+      fetch: toolCallArgsSafeFetch,
+    },
   });
 }
 

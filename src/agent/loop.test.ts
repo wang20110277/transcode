@@ -796,6 +796,7 @@ describe('empty-response recovery', () => {
         { tool: 'fake', args: '{"a":1}' },
         { text: '' },
         { text: '' },
+        { text: '' },
       ]),
       cwd: '/tmp',
       messages: [],
@@ -804,8 +805,10 @@ describe('empty-response recovery', () => {
       onEvent: (event) => events.push(event as never),
     });
     expect(result.stopReason).toBe('end_turn');
-    const warned = events.some((e) => e.type === 'text' && (e.text ?? '').includes('空响应'));
-    expect(warned).toBe(true);
+    const texts = events.filter((e) => e.type === 'text').map((e) => e.text ?? '');
+    expect(texts.some((t) => t.includes('重试(第 1/2 轮)'))).toBe(true);
+    expect(texts.some((t) => t.includes('重试(第 2/2 轮)'))).toBe(true);
+    expect(texts.some((t) => t.includes('连续 3 次'))).toBe(true);
   });
 
   test('首轮就空(无前序工具轮)→ 不重试直接结束,无 ⚠', async () => {
