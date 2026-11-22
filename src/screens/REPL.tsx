@@ -1474,7 +1474,14 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
 
   // Live-region tail window: keep the interactive frame shorter than the
   // terminal or Ink falls back to clearing + repainting everything.
-  const liveTail = sliceLiveTail(chat.liveOutput, (stdout?.rows ?? 24) - 10);
+  // Wrapped-row budget (review finding: Ink counts folded screen rows, so
+  // logical-line budgets blow on long CJK/diff lines): rows-12 with wide
+  // chars measured at 2 columns, columns-2 for paddingX.
+  const liveTail = sliceLiveTail(
+    chat.liveOutput,
+    (stdout?.rows ?? 24) - 12,
+    (stdout?.columns ?? 80) - 2,
+  );
 
   const promptLabel = phase === 'model_select'
     ? 'vendor> '
