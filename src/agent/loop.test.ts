@@ -768,3 +768,57 @@ describe('malformed tool-call breaker', () => {
     expect(result.stopReason).toBe('end_turn');
   });
 });
+
+describe('empty-response recovery', () => {
+  test('终轮三无(无文本无工具)→ 同消息重试一次,文本恢复', async () => {
+    const events: Array<{ type: string; text?: string }> = [];
+    const result = await runAgentLoop({
+      model: scriptedModel([
+        { tool: 'fake', args: '{"a":1}' },
+        { text: '' },            // empty round: provider hiccup (thinking-only stop)
+        { text: '最终答案来了。' },  // retry succeeds
+      ]),
+      cwd: '/tmp',
+      messages: [],
+      systemPrompt: 'test',
+      tools: [fakeTool],
+      onEvent: (event) => events.push(event as never),
+    });
+    expect(result.stopReason).toBe('end_turn');
+    const texts = events.filter((e) => e.type === 'text').map((e) => e.text ?? '');
+    expect(texts.join('')).toContain('最终答案来了');
+  });
+
+  test('重试仍空 → end_turn 且发出可见 ⚠(不再无声丢回复)', async () => {
+    const events: Array<{ type: string; text?: string }> = [];
+    const result = await runAgentLoop({
+      model: scriptedModel([
+        { tool: 'fake', args: '{"a":1}' },
+        { text: '' },
+        { text: '' },
+      ]),
+      cwd: '/tmp',
+      messages: [],
+      systemPrompt: 'test',
+      tools: [fakeTool],
+      onEvent: (event) => events.push(event as never),
+    });
+    expect(result.stopReason).toBe('end_turn');
+    const warned = events.some((e) => e.type === 'text' && (e.text ?? '').includes('空响应'));
+    expect(warned).toBe(true);
+  });
+
+  test('首轮就空(无前序工具轮)→ 不重试直接结束,无 ⚠', async () => {
+    const events: Array<{ type: string; text?: string }> = [];
+    const result = await runAgentLoop({
+      model: scriptedModel([{ text: '' }, { text: '' }]),
+      cwd: '/tmp',
+      messages: [],
+      systemPrompt: 'test',
+      tools: [fakeTool],
+      onEvent: (event) => events.push(event as never),
+    });
+    expect(result.stopReason).toBe('end_turn');
+    expect(events.some((e) => e.type === 'text')).toBe(false);
+  });
+});

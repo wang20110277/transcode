@@ -21,17 +21,22 @@ beforeAll(async () => {
       bindTools: () => ({
         async stream() {
           call++;
-          const chunks =
-            call === 1
-              ? [
-                  new AIMessageChunk({
-                    content: '',
-                    tool_call_chunks: [
-                      { id: 'c1', name: 'read_file', args: '{"path":"package.json"}', index: 0 },
-                    ],
-                  }),
-                ]
-              : [new AIMessageChunk({ content: '这个项目用 Vite + React。' })];
+          // Exact user shape: round 1 = intro text + two tool calls,
+          // round 2 = final answer text after the last tool result.
+          const rounds = [
+            [
+              new AIMessageChunk({ content: '我来看一下项目结构和关键文件。' }),
+              new AIMessageChunk({
+                content: '',
+                tool_call_chunks: [
+                  { id: 'c1', name: 'glob', args: '{"pattern":"**/*"}', index: 0 },
+                  { id: 'c2', name: 'read_file', args: '{"path":"package.json"}', index: 1 },
+                ],
+              }),
+            ],
+            [new AIMessageChunk({ content: '这个项目用 Vite + React,是一个示例应用。' })],
+          ];
+          const chunks = rounds[Math.min(call, 2) - 1]!;
           return (async function* () {
             for (const chunk of chunks) yield chunk;
           })();
@@ -74,7 +79,8 @@ describe('REPL turn landing (static architecture)', () => {
       expect(frame).toContain('帮我看下框架');
       // THE assertion that failed in production: the model's reply text
       // must survive into the landed entry.
-      expect(frame).toContain('Vite + React');
+      expect(frame).toContain('Vite + React,是一个示例应用。');
+      expect(frame).toContain('我来看一下项目结构和关键文件。');
     } finally {
       instance.unmount();
       rmSync('/tmp/transcode-repl-it-config.json', { force: true });

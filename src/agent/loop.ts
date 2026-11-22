@@ -374,6 +374,9 @@ export async function runAgentLoop(
   let callsAtStallNudge = 0;
   let wrapUpNudged = false;
   let malformedStrikes = 0;
+  // Empty-response retry state (thinking-model silent stops).
+  let sawToolRound = false;
+  let emptyResponseRetries = 0;
 
   for (let turn = 0; turn < maxTurns; turn++) {
     if (options.signal?.aborted) return { stopReason: 'cancelled', messages };
@@ -417,11 +420,32 @@ export async function runAgentLoop(
     if (options.signal?.aborted) return { stopReason: 'cancelled', messages };
 
     const toolCalls = parseToolCalls(partials, finalChunk, turn);
+
+    // Empty-response recovery: thinking models occasionally finish a round
+    // with everything in the reasoning channel — no content, no tool calls
+    // (observed on glm-5.3). Retry the same messages once instead of
+    // silently losing the reply; if it repeats, end loudly.
+    if (toolCalls.length === 0 && !text) {
+      if (sawToolRound && emptyResponseRetries < 1) {
+        emptyResponseRetries++;
+        continue; // re-request the same messages; push nothing
+      }
+      if (sawToolRound) {
+        await options.onEvent({
+          type: 'text',
+          text: '\n⚠ 模型返回了空响应(思考通道无正文),重试仍为空——请重发本轮或换个问法。',
+        });
+      }
+      messages.push(new AIMessage({ content: '', tool_calls: [] }));
+      return { stopReason: 'end_turn', messages };
+    }
+
     messages.push(new AIMessage({ content: text, tool_calls: toolCalls }));
 
     if (toolCalls.length === 0) {
       return { stopReason: 'end_turn', messages };
     }
+    sawToolRound = true;
 
     // Malformed-args breaker: every call this turn unparsable → strike;
     // a clean turn resets. The 3rd consecutive strike is refused (never
