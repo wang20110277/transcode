@@ -48,3 +48,12 @@ describe('permission mode', () => {
     expect(PERMISSION_MODES).toEqual(['ask', 'auto', 'readonly']);
   });
 });
+
+describe('nextPermissionMode', () => {
+  test('shift+tab 循环:ask → auto → readonly → ask', async () => {
+    const { nextPermissionMode } = await import('./permission.js');
+    expect(nextPermissionMode('ask')).toBe('auto');
+    expect(nextPermissionMode('auto')).toBe('readonly');
+    expect(nextPermissionMode('readonly')).toBe('ask');
+  });
+});

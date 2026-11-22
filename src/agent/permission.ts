@@ -21,6 +21,12 @@ export function getPermissionMode(): PermissionMode {
   return currentMode;
 }
 
+/** Shift+Tab cycling order: ask → auto → readonly → ask. */
+export function nextPermissionMode(current: PermissionMode): PermissionMode {
+  const index = PERMISSION_MODES.indexOf(current);
+  return PERMISSION_MODES[(index + 1) % PERMISSION_MODES.length]!;
+}
+
 export function setPermissionMode(mode: PermissionMode): void {
   if (!PERMISSION_MODES.includes(mode)) {
     throw new Error(`Unknown permission mode: ${mode}. Valid: ${PERMISSION_MODES.join(', ')}`);

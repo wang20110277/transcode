@@ -27,7 +27,7 @@ import {
 } from '../provider/web-search.js';
 import { runAgentLoop, type PermissionRequest } from '../agent/loop.js';
 import { createToolSession } from '../agent/tools/index.js';
-import { getPermissionMode } from '../agent/permission.js';
+import { getPermissionMode, nextPermissionMode, setPermissionMode } from '../agent/permission.js';
 import {
   buildSessionRecord,
   generateTitle,
@@ -1200,6 +1200,16 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         setPickCursor(prev => (prev + 1) % total);
         return;
       }
+      return;
+    }
+
+    // Shift+Tab cycles permission modes (ask → auto → readonly). Runs FIRST:
+    // ink reports shift+tab as a bare {tab} key (raw input '[Z'), so every
+    // later tab branch (popup completion, slash completion) would misfire.
+    if (key.tab && (ch === '[Z' || key.shift) && phase === 'idle') {
+      const next = nextPermissionMode(getPermissionMode());
+      setPermissionMode(next);
+      addHistory({ input: '', output: `权限模式 → ${next}` });
       return;
     }
 
