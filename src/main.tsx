@@ -9,32 +9,19 @@ import { autoUpdateNotice } from './upgrade.js';
 import { VERSION } from './version.js';
 const DEFAULT_MODEL: string = preferredModelId() ?? 'opus';
 
-function Banner({ modelId, cwd, envLabel }: { modelId: string; cwd: string; envLabel?: string }) {
+/** Startup banner as plain text: printed once as the first Static entry. */
+function bannerText(modelId: string, cwd: string, envLabel?: string): string {
   const models = getAvailableModels();
   const current = models.find(m => m.id === modelId);
-
-  const logo = bannerLines('T R A N S C O D E  ·  Multi-Model Agent');
-
-  return (
-    <Box flexDirection="column" marginBottom={1}>
-      <Text color="cyan" bold>{logo}</Text>
-      <Box marginTop={1}>
-        <Text color="green" bold>Trans Code</Text>
-        <Text> v{VERSION}</Text>
-      </Box>
-      <Box>
-        <Text color="yellow">Model: </Text>
-        <Text>{envLabel ?? current?.name ?? modelId}</Text>
-      </Box>
-      <Box>
-        <Text color="blue">Dir: </Text>
-        <Text>{cwd}</Text>
-      </Box>
-      <Box marginTop={1}>
-        <Text dimColor>Type "help" for available commands, "exit" to quit.</Text>
-      </Box>
-    </Box>
-  );
+  return [
+    bannerLines('T R A N S C O D E  ·  Multi-Model Agent'),
+    '',
+    `Trans Code v${VERSION}`,
+    `Model: ${envLabel ?? current?.name ?? modelId}`,
+    `Dir: ${cwd}`,
+    '',
+    'Type "help" for available commands, "exit" to quit.',
+  ].join('\n');
 }
 
 function App() {
@@ -50,8 +37,9 @@ function App() {
   return (
     <Box flexDirection="column">
       {/* A saved model choice (from the models flow) wins over the env label */}
-      <Banner modelId={modelId} cwd={cwd} envLabel={preferredModelId() ? undefined : envModelLabel()} />
-      <REPL ctx={ctx} updateNotice={autoUpdateNotice()} />
+
+      <REPL
+        banner={bannerText(modelId, cwd, preferredModelId() ? undefined : envModelLabel())} ctx={ctx} updateNotice={autoUpdateNotice()} />
     </Box>
   );
 }

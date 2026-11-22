@@ -84,11 +84,13 @@ const SEARCH_PROVIDERS: WebSearchConfig['provider'][] = ['tavily', 'brave'];
 
 interface REPLProps {
   ctx: CommandContext;
+  /** Startup banner text; printed once as the first Static entry. */
+  banner?: string;
   /** Background auto-update outcome; a non-null message shows as a banner. */
   updateNotice?: Promise<string | null>;
 }
 
-export default function REPL({ ctx, updateNotice }: REPLProps) {
+export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [input, setInput] = useState('');
@@ -110,7 +112,12 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
     /** Input echo shown at the top of the live region while a turn runs. */
     turnInput: string;
   }
-  const [chat, setChat] = useState<ChatView>({ history: [], liveOutput: '', turnInput: '' });
+  const [chat, setChat] = useState<ChatView>(() => ({
+    // Banner prints once as the first static item (spec ruling #3).
+    history: banner ? [{ input: '', output: banner }] : [],
+    liveOutput: '',
+    turnInput: '',
+  }));
   const liveOutputRef = useRef('');
   const turnDisplayRef = useRef('');
   const [historyIndex, setHistoryIndex] = useState(-1);
@@ -1098,6 +1105,13 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
       if (cmdName === 'clear') {
         ctx.clearHistory();
         setChat(prev => ({ ...prev, history: [] }));
+        // Static output cannot be un-printed: /clear starts a fresh
+        // transcript below (scrollback keeps the old one). The confirmation
+        // lands in a SEPARATE commit — same-batch clear+append gets
+        // swallowed by Static's length-based diff (probe-verified).
+        setTimeout(() => {
+          addHistory({ input: '', output: '已开始新对话。(旧内容保留在终端滚动缓冲中)' });
+        }, 0);
       } else if (result.output) {
         addHistory({ input: trimmed, output: result.output });
       }
