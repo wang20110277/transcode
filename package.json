@@ -1,6 +1,6 @@
 {
   "name": "@trans-ai/trans-code",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "AI-powered multi-model coding CLI",
   "type": "module",
   "license": "UNLICENSED",
