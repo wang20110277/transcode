@@ -158,3 +158,13 @@ export function writeContextTokens(modelId: string, tokens: number | null): void
   auto.byModel = byModel;
   saveConfig({ ...config, autoCompact: auto });
 }
+
+/** /models flow budget presets; tokens=null means "remove the entry" (fall back to global). */
+export const CONTEXT_BUDGET_CHOICES: Array<{ label: string; tokens: number | null; custom?: boolean }> = [
+  { label: '默认(100k)', tokens: null },
+  { label: '128k', tokens: 128_000 },
+  { label: '256k', tokens: 256_000 },
+  { label: '512k', tokens: 512_000 },
+  { label: '1M', tokens: 1_000_000 },
+  { label: '自定义…', tokens: null, custom: true },
+];

@@ -221,7 +221,13 @@ ACP 默认权限模式是 `ask`：写文件、改文件、执行命令前会向�
 - **`dispatch_agent`**：多步研究型子任务 —— 子 Agent 用角色档案的模型 + 工具白名单（默认只读三件套）跑自己的循环。上下文契约是**任务进、报告出**：子 Agent 看不到主对话，任务描述必须自包含；只有最终报告回入主对话。派发本身需用户 y/n 授权，子 Agent 禁止递归派发，回合上限 25
 - **图片自动代理**：配置了 `routing.vision` 时，工具产生的图片自动经视觉模型转文字描述，主模型无需多模态能力
 
-主对话有防护栏：探索停滞（30 次零写入）自动催促、无视则强制终止（`stalled`）；交付后长尾钻探会被收尾提醒；上下文接近上限自动摘要压缩（`TRANSCODE_COMPACT_CHARS`，默认 20 万字符，0 关闭）。
+主对话有防护栏：探索停滞（30 次零写入）自动催促、无视则强制终止（`stalled`）；交付后长尾钻探会被收尾提醒；上下文接近预算自动摘要压缩（预算按 token,CJK 校准估算）。
+
+**上下文预算**（1M 窗口模型如 GLM-5.3、DeepSeek V4 Pro 建议显式设置）：
+
+- `/models` 流程在连通测试后选档：默认(100k)/128k/256k/512k/1M/自定义——按所选模型写入 `autoCompact.byModel`
+- `/compact` 无参查看当前生效配置（模型、token 预算、来源层、keepTurns）；`/compact <N>` 仍为手动压缩
+- 手改 `~/.transcode.json`：`autoCompact: { contextTokens, byModel: { "glmc:glm-5.3": 1000000 } }`;优先级 byModel > 环境变量（`TRANSCODE_COMPACT_TOKENS`，旧 `TRANSCODE_COMPACT_CHARS` 自动 /4 折算）> 全局 > 默认 100k;`enabled: false` 一键关闭全部自动压缩,值 0 为按层暗门
 
 ## 方案先行
 

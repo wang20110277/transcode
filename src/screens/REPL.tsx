@@ -17,7 +17,7 @@ import {
   switchNote,
   type ModelId,
 } from '../provider/provider.js';
-import { loadConfig, normalizeAutoCompact } from '../config.js';
+import { CONTEXT_BUDGET_CHOICES, loadConfig, normalizeAutoCompact, writeContextTokens } from '../config.js';
 import {
   checkWebSearch,
   normalizeWebSearchConfig,
@@ -86,7 +86,9 @@ type PromptPhase =
   | 'session_select'
   | 'search_provider'
   | 'search_apikey'
-  | 'search_check';
+  | 'search_check'
+  | 'model_context'
+  | 'model_context_custom';
 
 /** Providers offered by the /search setup flow (mirrors normalizeWebSearchConfig). */
 const SEARCH_PROVIDERS: WebSearchConfig['provider'][] = ['tavily', 'brave'];
@@ -150,6 +152,11 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
     setPendingModel(id);
   };
   const [modelCursor, setModelCursor] = useState(0);
+  // /models budget step: cursor over CONTEXT_BUDGET_CHOICES; the verified
+  // switch args wait here while the user picks a context budget.
+  const [modelContextCursor, setModelContextCursor] = useState(0);
+  const pendingSwitchRef = useRef<{ spec: string; displayName: string; apiKey: string; message: string; served?: string } | null>(null);
+
   // /search setup flow: cursor over SEARCH_PROVIDERS, ref carries the pick.
   const [searchCursor, setSearchCursor] = useState(0);
   const searchProviderRef = useRef<WebSearchConfig['provider']>('tavily');
@@ -775,7 +782,11 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       setPhase('model_check');
       const result = await verifyModel(spec, apiKey);
       if (result.ok) {
-        applyModelSwitch(spec, displayName, apiKey, `✓ ${result.message}`, result.served);
+        // Budget picker sits between verification and applying the switch.
+        pendingSwitchRef.current = { spec, displayName, apiKey, message: `✓ ${result.message}`, served: result.served };
+        setModelContextCursor(0);
+        setPhase('model_context');
+        commitInput('');
         return;
       }
       addHistory({
@@ -894,6 +905,21 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
 
     if (phase === 'vendor_apikey' || phase === 'model_apikey' || phase === 'model_check') {
       await handleApiKey(trimmed);
+      commitInput('');
+      return;
+    }
+
+    if (phase === 'model_context_custom') {
+      const tokens = Number(trimmed);
+      if (!Number.isFinite(tokens) || tokens <= 0 || !Number.isInteger(tokens)) {
+        addHistory({ input: trimmed, output: '请输入正整数 token 数(例如 1000000),或 Esc 取消。' });
+        return;
+      }
+      const pending = pendingSwitchRef.current!;
+      pendingSwitchRef.current = null;
+      writeContextTokens(pending.spec, tokens);
+      setPhase('idle');
+      applyModelSwitch(pending.spec, pending.displayName, pending.apiKey, pending.message, pending.served);
       commitInput('');
       return;
     }
@@ -1033,6 +1059,25 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       };
       if (!conversationRef.current) {
         addHistory({ input: trimmed, output: '当前没有进行中的会话,先聊几句或 /resume 恢复一个。' });
+        finishCompact();
+        return;
+      }
+      // No args: show the effective context-budget config instead of running.
+      if (args.length === 0 || !args[0]?.trim()) {
+        const budget = resolveContextTokens(ctx.modelId);
+        const sourceLabel =
+          budget.source === 'byModel' ? '按模型(byModel)' :
+          budget.source === 'env' ? '环境变量' :
+          budget.source === 'global' ? '全局配置' : '默认';
+        const approxChars = Math.round(budget.tokens * 2.5); // mixed CJK/ASCII口径
+        addHistory({
+          input: trimmed,
+          output:
+            `上下文预算 — 模型 ${ctx.modelId}\n` +
+            `生效: ${budget.tokens.toLocaleString()} tokens(约 ${approxChars.toLocaleString()} 字符)· 来源:${sourceLabel}\n` +
+            `自动压缩:${budget.enabled ? '开' : '关'} · keepTurns:${normalizeAutoCompact(loadConfig().autoCompact).keepTurns}\n` +
+            `配置:autoCompact.byModel / contextTokens(~/.transcode.json),/models 流程可交互设置`,
+        });
         finishCompact();
         return;
       }
@@ -1224,6 +1269,39 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       }
       if (ch === 'n' || ch === 'N') {
         pendingPermissionRef.current?.resolve(false);
+        return;
+      }
+      return;
+    }
+
+    if (phase === 'model_context') {
+      if (key.upArrow) {
+        setModelContextCursor((c) => (c - 1 + CONTEXT_BUDGET_CHOICES.length) % CONTEXT_BUDGET_CHOICES.length);
+        return;
+      }
+      if (key.downArrow) {
+        setModelContextCursor((c) => (c + 1) % CONTEXT_BUDGET_CHOICES.length);
+        return;
+      }
+      if (key.escape) {
+        const pending = pendingSwitchRef.current;
+        pendingSwitchRef.current = null;
+        setPhase('idle');
+        if (pending) applyModelSwitch(pending.spec, pending.displayName, pending.apiKey, pending.message, pending.served);
+        return;
+      }
+      if (key.return) {
+        const choice = CONTEXT_BUDGET_CHOICES[modelContextCursor]!;
+        const pending = pendingSwitchRef.current!;
+        if (choice.custom) {
+          setPhase('model_context_custom');
+          commitInput('');
+          return;
+        }
+        pendingSwitchRef.current = null;
+        writeContextTokens(pending.spec, choice.tokens);
+        setPhase('idle');
+        applyModelSwitch(pending.spec, pending.displayName, pending.apiKey, pending.message, pending.served);
         return;
       }
       return;
@@ -1514,6 +1592,8 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
             ? keyHint ? `apikey (回车沿用 ${keyHint})> ` : 'apikey> '
             : phase === 'vendor_apikey'
               ? 'apikey> '
+            : phase === 'model_context_custom'
+              ? 'context tokens> '
             : phase === 'search_apikey'
               ? 'search apikey> '
             : phase === 'permission'
@@ -1620,6 +1700,19 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
             </Box>
           ))}
           <Text color="gray" dimColor>↑↓ 选择厂商 · Enter 进入模型列表</Text>
+        </Box>
+      )}
+
+      {phase === 'model_context' && (
+        <Box flexDirection="column" marginLeft={2}>
+          <Text color="gray" dimColor>上下文预算(↑↓ 选择 · Enter 确认 · Esc 跳过)</Text>
+          {CONTEXT_BUDGET_CHOICES.map((choice, i) => (
+            <Box key={choice.label}>
+              <Text color={i === modelContextCursor ? 'cyan' : undefined}>
+                {i === modelContextCursor ? '❯ ' : '  '}{choice.label}
+              </Text>
+            </Box>
+          ))}
         </Box>
       )}
 

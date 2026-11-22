@@ -99,3 +99,17 @@ describe('writeContextTokens', () => {
     }
   });
 });
+
+describe('context budget choices', () => {
+  test('选档映射:label→tokens,含默认删除哨兵', async () => {
+    const { CONTEXT_BUDGET_CHOICES } = await import('./config.js');
+    const labels = CONTEXT_BUDGET_CHOICES.map(c => c.label);
+    expect(labels).toContain('默认(100k)');
+    expect(labels).toContain('1M');
+    const oneM = CONTEXT_BUDGET_CHOICES.find(c => c.label === '1M');
+    expect(oneM?.tokens).toBe(1_000_000);
+    const def = CONTEXT_BUDGET_CHOICES.find(c => c.label.startsWith('默认'));
+    expect(def?.tokens).toBe(null); // null = 删除该模型条目回退全局
+    expect(CONTEXT_BUDGET_CHOICES.some(c => c.label === '自定义…')).toBe(true);
+  });
+});
