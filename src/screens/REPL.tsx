@@ -52,7 +52,7 @@ import { reduceQueue, shouldResumeQueue, type QueueAction } from './input-queue.
 import { createStreamThrottler } from './stream-throttle.js';
 import { historyRule } from './history-rule.js';
 import { renderDiff } from './diff-render.js';
-import { createTurnStats, recordCall, renderTurnLog, shouldCollapse, summaryLine } from './turn-summary.js';
+import { createTurnStats, recordCall, renderCollapsed, shouldCollapse, summaryLine } from './turn-summary.js';
 import { buildSystemPrompt, INIT_PROMPT, loadProjectContext } from '../agent/system-prompt.js';
 import { HumanMessage, SystemMessage, type BaseMessage } from '@langchain/core/messages';
 
@@ -567,7 +567,7 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         // Collapsed detail is kept (hiddenLines) so ctrl+o can reveal it.
         if (shouldCollapse(stats)) {
           const line = summaryLine(stats);
-          if (line) streamAppend(`\n${line}`);
+          if (line) streamAppend(`\n${renderCollapsed(line, bufferedLines)}`);
           attachHiddenLines(bufferedLines);
         } else {
           for (const line of bufferedLines) streamAppend(line);
@@ -1430,11 +1430,7 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
           )}
           {entry.output && (
             <Box marginLeft={2}>
-              <Text>
-                {entry.hiddenLines?.length
-                  ? renderTurnLog(entry.output, entry.hiddenLines, verboseTools)
-                  : entry.output}
-              </Text>
+              <Text>{entry.output}</Text>
             </Box>
           )}
         </Box>

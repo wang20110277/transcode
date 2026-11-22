@@ -40,25 +40,23 @@ describe('turn summary', () => {
   });
 });
 
-describe('renderTurnLog', () => {
-  test('折叠:summary + "… +N lines (ctrl+o to expand)",N 数实际行数', async () => {
-    const { renderTurnLog } = await import('./turn-summary.js');
-    const hidden = ['\n⚙ read_file a.ts ✓', '\n⚙ bash npm test ✓\nextra line', '\n⚙ grep foo ✓'];
-    expect(renderTurnLog('⚙ 3 tool calls · …', hidden, false)).toBe(
-      '⚙ 3 tool calls · …\n… +4 lines (ctrl+o to expand)',
-    );
+
+describe('static render helpers', () => {
+  test('renderCollapsed:summary + "(ctrl+o 展开明细)" 提示;hiddenLines 空则原样', async () => {
+    const { renderCollapsed } = await import('./turn-summary.js');
+    const hidden = ['\n⚙ read_file a ✓', '\n⚙ bash t ✓', 'extra\nline'];
+    const out = renderCollapsed('⚙ 3 tool calls · …', hidden);
+    expect(out).toContain('⚙ 3 tool calls · …');
+    expect(out).toContain('… +4 lines (ctrl+o 展开明细)');
+    expect(renderCollapsed('S', [])).toBe('S');
   });
 
-  test('展开:明细可见 + "(ctrl+o to collapse)" 提示', async () => {
-    const { renderTurnLog } = await import('./turn-summary.js');
-    const out = renderTurnLog('S', ['\n⚙ read_file a.ts ✓', '\n⚙ bash npm test ✓'], true);
-    expect(out).toContain('read_file a.ts');
-    expect(out).toContain('bash npm test');
-    expect(out).toContain('(ctrl+o to collapse)');
-  });
-
-  test('无明细时原样返回 summary', async () => {
-    const { renderTurnLog } = await import('./turn-summary.js');
-    expect(renderTurnLog('S', [], false)).toBe('S');
+  test('renderExpansion:全量明细 + 头,无 collapse 提示', async () => {
+    const { renderExpansion } = await import('./turn-summary.js');
+    const out = renderExpansion({ output: '⚙ 2 tool calls · …', hiddenLines: ['\n⚙ read_file a ✓', '\n⚙ bash t ✓'] });
+    expect(out).toContain('展开明细');
+    expect(out).toContain('read_file a ✓');
+    expect(out).toContain('bash t ✓');
+    expect(out).not.toContain('collapse');
   });
 });

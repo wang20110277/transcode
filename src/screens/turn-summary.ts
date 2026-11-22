@@ -34,17 +34,18 @@ export function summaryLine(stats: TurnStats): string {
 }
 
 /**
- * Render a collapsed turn's tool log. Non-verbose: the summary line plus a
- * "… +N lines (ctrl+o to expand)" affordance; verbose (ctrl+o): the hidden
- * detail lines become visible so nothing is permanently unreachable.
+ * Collapsed turn line, stamped at creation time (static entries print once
+ * and never re-render): summary plus the expand affordance.
  */
-export function renderTurnLog(summary: string, hiddenLines: string[], verbose: boolean): string {
+export function renderCollapsed(summary: string, hiddenLines: string[]): string {
   if (hiddenLines.length === 0) return summary;
-  if (verbose) {
-    return `${summary}\n(ctrl+o to collapse)${hiddenLines.join('')}`;
-  }
   const count = hiddenLines
     .flatMap((line) => line.split('\n'))
     .filter((line) => line.trim().length > 0).length;
-  return `${summary}\n… +${count} lines (ctrl+o to expand)`;
+  return `${summary}\n… +${count} lines (ctrl+o 展开明细)`;
+}
+
+/** ctrl+o action: full detail of a folded turn, printed as a new entry. */
+export function renderExpansion(entry: { output: string; hiddenLines: string[] }): string {
+  return `⚙ 展开明细:${entry.hiddenLines.join('')}`;
 }
