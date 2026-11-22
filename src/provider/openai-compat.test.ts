@@ -38,3 +38,16 @@ describe('serializeToolCallArgsInBody', () => {
     expect(serializeToolCallArgsInBody('not json')).toBe('not json');
   });
 });
+
+describe('resolveMaxTokens', () => {
+  test('未设环境变量 → undefined(不限制,思考模型不被 8192 截断)', async () => {
+    const { resolveMaxTokens } = await import('./openai-compat.js');
+    delete process.env.TRANSCODE_MAX_TOKENS;
+    expect(resolveMaxTokens({})).toBeUndefined();
+  });
+  test('环境变量设置 → 有限正数', async () => {
+    const { resolveMaxTokens } = await import('./openai-compat.js');
+    expect(resolveMaxTokens({ TRANSCODE_MAX_TOKENS: '4096' })).toBe(4096);
+    expect(resolveMaxTokens({ TRANSCODE_MAX_TOKENS: 'bogus' })).toBeUndefined();
+  });
+});

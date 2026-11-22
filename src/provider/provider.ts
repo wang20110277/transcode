@@ -2,7 +2,7 @@ import { ChatOpenAI } from '@langchain/openai';
 import { ChatAnthropic } from '@langchain/anthropic';
 import { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { loadConfig, saveConfig } from '../config.js';
-import { toolCallArgsSafeFetch } from './openai-compat.js';
+import { resolveMaxTokens, toolCallArgsSafeFetch } from './openai-compat.js';
 
 export type ModelId =
   | 'opus'
@@ -241,10 +241,8 @@ function apiKeyFor(envKey: string): string {
   return (process.env.TRANSCODE_API_KEY ?? '').trim();
 }
 
-function maxTokens(): number {
-  const raw = Number(process.env.TRANSCODE_MAX_TOKENS ?? '');
-  if (Number.isFinite(raw) && raw > 0) return Math.floor(raw);
-  return 8192;
+function maxTokens(): number | undefined {
+  return resolveMaxTokens(process.env);
 }
 
 /**
@@ -435,7 +433,8 @@ function buildChatModel(
       ...(baseUrl ? { anthropicApiUrl: baseUrl } : {}),
       ...(authToken ? { clientOptions: { authToken } } : {}),
       temperature: 0,
-      maxTokens: tokens,
+      // Anthropic requires max_tokens; keep a fixed floor when unrestricted.
+      maxTokens: tokens ?? 8192,
       // @langchain/anthropic defaults top_k/top_p to -1 and forwards them on
       // every request. Strict Anthropic-compatible gateways reject that
       // ("top_p is in (0, 1.0]"), so drop both keys unless explicitly set.
@@ -450,7 +449,9 @@ function buildChatModel(
     modelName: resolved.model,
     openAIApiKey: apiKey,
     temperature: 0,
-    maxTokens: tokens,
+    // undefined = 不设上限(思考模型的 reasoning 计入 max_tokens,固定
+    // 8192 会在长思考轮把正文截没 → 空响应)。TRANSCODE_MAX_TOKENS 可显式限制。
+    ...(tokens !== undefined ? { maxTokens: tokens } : {}),
     maxRetries: 2, // transport instability (429/5xx) with SDK backoff
     // GLM 等 OpenAI 兼容网关要求 assistant 历史 tool_calls 的 arguments 为
     // 字符串;LangChain 以对象出站会在第二轮起被网关以 1210 拒绝并表现为
