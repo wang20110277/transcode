@@ -5,6 +5,7 @@ import { bashTool } from './bash.js';
 import { editFileTool, readFileTool, writeFileTool } from './files.js';
 import { globTool, grepTool } from './search.js';
 import { todoWriteTool } from './todo.js';
+import { memoryDeleteTool, memorySaveTool } from './memory.js';
 import { createAskModelTool } from './ask-model.js';
 import { createDispatchAgentTool } from './dispatch.js';
 import { readImageBlocks } from './files.js';
@@ -27,6 +28,8 @@ const dispatchPool = [
   bashOutputTool,
   todoWriteTool,
   askModelTool,
+  memorySaveTool,
+  memoryDeleteTool,
 ];
 const dispatchAgentTool = createDispatchAgentTool({
   runLoop: (options) =>
