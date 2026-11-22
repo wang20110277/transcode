@@ -25,6 +25,7 @@ import {
   webSearchConfigWarning,
   type WebSearchConfig,
 } from '../provider/web-search.js';
+import { VERSION } from '../version.js';
 import { runAgentLoop, type PermissionRequest } from '../agent/loop.js';
 import { createToolSession } from '../agent/tools/index.js';
 import { getPermissionMode, nextPermissionMode, setPermissionMode } from '../agent/permission.js';
@@ -57,11 +58,19 @@ import { sliceLiveTail } from './live-view.js';
 import { buildSystemPrompt, INIT_PROMPT, loadProjectContext } from '../agent/system-prompt.js';
 import { HumanMessage, SystemMessage, type BaseMessage } from '@langchain/core/messages';
 
+interface BannerData {
+  logo: string;
+  model: string;
+  dir: string;
+}
+
 interface HistoryEntry {
   input: string;
   output: string;
   /** Tool-log detail hidden behind the collapse summary (ctrl+o reveals). */
   hiddenLines?: string[];
+  /** Set on the startup banner entry; the static renderer styles it. */
+  banner?: BannerData;
 }
 
 type PromptPhase =
@@ -84,8 +93,8 @@ const SEARCH_PROVIDERS: WebSearchConfig['provider'][] = ['tavily', 'brave'];
 
 interface REPLProps {
   ctx: CommandContext;
-  /** Startup banner text; printed once as the first Static entry. */
-  banner?: string;
+  /** Startup banner data; printed once as the first Static entry. */
+  banner?: BannerData;
   /** Background auto-update outcome; a non-null message shows as a banner. */
   updateNotice?: Promise<string | null>;
 }
@@ -112,9 +121,13 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
     /** Input echo shown at the top of the live region while a turn runs. */
     turnInput: string;
   }
+  const bannerEntry = banner
+    ? { input: '', output: '', banner }
+    : null;
+  const bannerEntryRef = useRef(bannerEntry);
   const [chat, setChat] = useState<ChatView>(() => ({
     // Banner prints once as the first static item (spec ruling #3).
-    history: banner ? [{ input: '', output: banner }] : [],
+    history: bannerEntry ? [bannerEntry] : [],
     liveOutput: '',
     turnInput: '',
   }));
@@ -1104,7 +1117,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
 
       if (cmdName === 'clear') {
         ctx.clearHistory();
-        setChat(prev => ({ ...prev, history: [] }));
+        setChat(prev => ({ ...prev, history: bannerEntryRef.current ? [bannerEntryRef.current] : [] }));
         // Static output cannot be un-printed: /clear starts a fresh
         // transcript below (scrollback keeps the old one). The confirmation
         // lands in a SEPARATE commit — same-batch clear+append gets
@@ -1506,6 +1519,26 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       <Static items={chat.history}>
         {(entry, i) => (
           <Box key={i} flexDirection="column">
+            {entry.banner ? (
+              <Box flexDirection="column" marginBottom={1}>
+                <Text color="cyan" bold>{entry.banner.logo}</Text>
+                <Box marginTop={1}>
+                  <Text color="green" bold>Trans Code</Text>
+                  <Text> v{VERSION}</Text>
+                </Box>
+                <Box>
+                  <Text color="yellow">Model: </Text>
+                  <Text>{entry.banner.model}</Text>
+                </Box>
+                <Box>
+                  <Text color="blue">Dir: </Text>
+                  <Text>{entry.banner.dir}</Text>
+                </Box>
+                <Box marginTop={1}>
+                  <Text dimColor>Type "help" for available commands, "exit" to quit.</Text>
+                </Box>
+              </Box>
+            ) : null}
             {entry.input && (
               <Box flexDirection="column">
                 <Text color="gray" dimColor>{historyRule(stdout?.columns ?? 80)}</Text>

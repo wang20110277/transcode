@@ -9,19 +9,15 @@ import { autoUpdateNotice } from './upgrade.js';
 import { VERSION } from './version.js';
 const DEFAULT_MODEL: string = preferredModelId() ?? 'opus';
 
-/** Startup banner as plain text: printed once as the first Static entry. */
-function bannerText(modelId: string, cwd: string, envLabel?: string): string {
+/** Startup banner data; printed once as the first Static entry (styled). */
+function bannerData(modelId: string, cwd: string, envLabel?: string) {
   const models = getAvailableModels();
   const current = models.find(m => m.id === modelId);
-  return [
-    bannerLines('T R A N S C O D E  ·  Multi-Model Agent'),
-    '',
-    `Trans Code v${VERSION}`,
-    `Model: ${envLabel ?? current?.name ?? modelId}`,
-    `Dir: ${cwd}`,
-    '',
-    'Type "help" for available commands, "exit" to quit.',
-  ].join('\n');
+  return {
+    logo: bannerLines('T R A N S C O D E  ·  Multi-Model Agent'),
+    model: envLabel ?? current?.name ?? modelId,
+    dir: cwd,
+  };
 }
 
 function App() {
@@ -39,7 +35,7 @@ function App() {
       {/* A saved model choice (from the models flow) wins over the env label */}
 
       <REPL
-        banner={bannerText(modelId, cwd, preferredModelId() ? undefined : envModelLabel())} ctx={ctx} updateNotice={autoUpdateNotice()} />
+        banner={bannerData(modelId, cwd, preferredModelId() ? undefined : envModelLabel())} ctx={ctx} updateNotice={autoUpdateNotice()} />
     </Box>
   );
 }
