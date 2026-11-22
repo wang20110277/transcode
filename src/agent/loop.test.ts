@@ -690,3 +690,81 @@ describe('runAgentLoop', () => {
     expect(wrapUp).toBeUndefined();
   });
 });
+
+describe('context estimator sees tool-call args', () => {
+  test('estimateMessagesChars 计入 tool_calls 参数(巨型参数不再隐形)', async () => {
+    const { AIMessage } = await import('@langchain/core/messages');
+    const { estimateMessagesChars } = await import('./loop.js');
+    const messages = [
+      new AIMessage({
+        content: '写文件',
+        tool_calls: [
+          { id: 'c1', name: 'write_file', args: { content: 'x'.repeat(250_000) } },
+        ],
+      }),
+    ];
+    expect(estimateMessagesChars(messages)).toBeGreaterThan(200_000);
+  });
+});
+
+describe('malformed tool-call breaker', () => {
+  test('isMalformedToolArgs:仅 _raw 键为真,正常/空参数为假', async () => {
+    const { isMalformedToolArgs } = await import('./loop.js');
+    expect(isMalformedToolArgs({ _raw: '{"broken": tru' })).toBe(true);
+    expect(isMalformedToolArgs({ path: 'a.ts' })).toBe(false);
+    expect(isMalformedToolArgs({})).toBe(false);
+  });
+
+  test('连续 3 次全格式错误 → 第 3 次拒绝执行并停轮(stalled),给出指引', async () => {
+    let executions = 0;
+    const countingTool: AgentTool = {
+      ...fakeTool,
+      name: 'fake',
+      async execute() {
+        executions++;
+        return 'ok';
+      },
+    };
+    const events: Array<{ type: string; text?: string }> = [];
+    const result = await runAgentLoop({
+      model: scriptedModel([
+        { tool: 'fake', args: '{"path": "a.ts", "content": "xxx' },
+        { tool: 'fake', args: '{"path": "b.ts", "content": "yyy' },
+        { tool: 'fake', args: '{"path": "c.ts", "content": "zzz' },
+        { tool: 'fake', args: '{"path": "d.ts", "content": "www' },
+      ]),
+      cwd: '/tmp',
+      messages: [],
+      systemPrompt: 'test',
+      tools: [countingTool],
+      onEvent: (event) => events.push(event as never),
+    });
+
+    expect(result.stopReason).toBe('stalled');
+    expect(executions).toBeLessThanOrEqual(2);
+    const guidance = events.find(
+      (event) => event.type === 'text' && JSON.stringify(event).includes('malformed'),
+    );
+    expect(guidance).toBeDefined();
+  });
+
+  test('格式错误后自愈(第 2 次正常)→ 计数归零不熔断', async () => {
+    const events: Array<{ type: string }> = [];
+    const result = await runAgentLoop({
+      model: scriptedModel([
+        { tool: 'fake', args: '{"broken": tru' },
+        { tool: 'fake', args: '{"a":1}' },
+        { tool: 'fake', args: '{"a":2}' },
+        { tool: 'fake', args: '{"a":3}' },
+        { tool: 'fake', args: '{"a":4}' },
+        { tool: 'text' as never, text: 'done' } as never,
+      ]),
+      cwd: '/tmp',
+      messages: [],
+      systemPrompt: 'test',
+      tools: [fakeTool],
+      onEvent: (event) => events.push(event as never),
+    });
+    expect(result.stopReason).toBe('end_turn');
+  });
+});

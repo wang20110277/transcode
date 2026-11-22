@@ -249,12 +249,35 @@ async function runMockTurn(
 
 const COMPACT_DEFAULT_CHARS = 200_000;
 
-function estimateMessagesChars(messages: BaseMessage[]): number {
-  return messages.reduce(
-    (sum, message) => sum + JSON.stringify(message.content ?? '').length + 200,
-    0,
-  );
+/**
+ * Char estimate for the in-turn compaction gate. MUST include tool-call
+ * arguments: a turn that repeatedly emits huge (possibly malformed) tool
+ * payloads grows history invisibly if only message content is counted —
+ * that blind spot once ballooned a session past the model's context window.
+ */
+export function estimateMessagesChars(messages: BaseMessage[]): number {
+  return messages.reduce((sum, message) => {
+    const toolCalls = (message as AIMessage).tool_calls ?? [];
+    const argsChars = toolCalls.reduce(
+      (n, call) => n + JSON.stringify(call.args ?? '').length,
+      0,
+    );
+    return sum + JSON.stringify(message.content ?? '').length + argsChars + 200;
+  }, 0);
 }
+
+/** True when parseToolCalls fell back to {_raw}: the args were not valid JSON. */
+export function isMalformedToolArgs(args: Record<string, unknown>): boolean {
+  return Object.keys(args).length === 1 && '_raw' in args;
+}
+
+/** Consecutive all-malformed turns tolerated before the breaker stops the loop. */
+const MALFORMED_TOOL_CALL_BREAKER = 3;
+
+const MALFORMED_GUIDANCE =
+  'Your last tool calls had malformed JSON arguments and were never executed. ' +
+  'Do NOT retry the same payload. Write the file in smaller sections, or use a ' +
+  'bash heredoc for large content, or reply describing what you are stuck on.';
 
 /**
  * Auto-compaction (Claude Code's autoCompact, ported): when the estimated
@@ -350,6 +373,7 @@ export async function runAgentLoop(
   let stallNudged = false;
   let callsAtStallNudge = 0;
   let wrapUpNudged = false;
+  let malformedStrikes = 0;
 
   for (let turn = 0; turn < maxTurns; turn++) {
     if (options.signal?.aborted) return { stopReason: 'cancelled', messages };
@@ -397,6 +421,17 @@ export async function runAgentLoop(
 
     if (toolCalls.length === 0) {
       return { stopReason: 'end_turn', messages };
+    }
+
+    // Malformed-args breaker: every call this turn unparsable → strike;
+    // a clean turn resets. The 3rd consecutive strike is refused (never
+    // executed) and stops the loop — retrying the same giant broken
+    // payload only balloons the context.
+    const allMalformed = toolCalls.every((call) => isMalformedToolArgs(call.args));
+    malformedStrikes = allMalformed ? malformedStrikes + 1 : 0;
+    if (malformedStrikes >= MALFORMED_TOOL_CALL_BREAKER) {
+      await options.onEvent({ type: 'text', text: `\n⚠ ${MALFORMED_GUIDANCE}\n` });
+      return { stopReason: 'stalled', messages };
     }
 
     for (const call of toolCalls) {
