@@ -150,7 +150,8 @@ export function saveConfig(config: TranscodeConfig): void {
 /** Set (tokens) or remove (null) the per-model context budget entry. */
 export function writeContextTokens(modelId: string, tokens: number | null): void {
   const config = loadConfig();
-  const auto = { ...(config.autoCompact ?? {}) } as NonNullable<TranscodeConfig['autoCompact']>;
+  const raw = config.autoCompact;
+  const auto: AutoCompactConfig = raw && typeof raw === 'object' ? { ...raw } : {};
   const byModel = { ...(auto.byModel ?? {}) };
   if (tokens === null) delete byModel[modelId];
   else byModel[modelId] = tokens;
