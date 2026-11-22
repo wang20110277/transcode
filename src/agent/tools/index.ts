@@ -7,6 +7,7 @@ import { globTool, grepTool } from './search.js';
 import { todoWriteTool } from './todo.js';
 import { memoryDeleteTool, memorySaveTool } from './memory.js';
 import { webFetchTool } from './web-fetch.js';
+import { webSearchTool } from './web-search.js';
 import { createAskModelTool } from './ask-model.js';
 import { createDispatchAgentTool } from './dispatch.js';
 import { readImageBlocks } from './files.js';
@@ -32,6 +33,7 @@ const dispatchPool = [
   memorySaveTool,
   memoryDeleteTool,
   webFetchTool,
+  webSearchTool,
 ];
 const dispatchAgentTool = createDispatchAgentTool({
   runLoop: (options) =>

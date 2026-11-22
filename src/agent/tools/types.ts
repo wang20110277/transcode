@@ -47,6 +47,8 @@ export interface AgentTool {
   isMutating: boolean;
   /** When true for a given input, a mutating tool may skip the permission prompt. */
   isReadOnly?(input: Record<string, unknown>): boolean;
+  /** When false, the tool is left out of the per-turn tool table (e.g. unconfigured). */
+  isEnabled?: () => boolean;
   title(input: Record<string, unknown>): string;
   execute(input: Record<string, unknown>, ctx: ToolContext): Promise<string | ToolOutput>;
 }

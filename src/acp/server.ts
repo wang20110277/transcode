@@ -1,6 +1,8 @@
 import { promises as fs } from 'node:fs';
 import { RPC_ERRORS, RpcError, JsonRpcTransport } from './transport.js';
 import { AcpSession, sessionCwd, sessionNewResult, type AcpSessionHost } from './session.js';
+import { loadConfig } from '../config.js';
+import { webSearchConfigWarning } from '../provider/web-search.js';
 import { VERSION } from '../version.js';
 import type {
   AcpPermissionRequest,
@@ -166,6 +168,10 @@ export class AcpServer implements AcpSessionHost {
     process.stderr.write(
       `[transcode] session ${session.id} created cwd=${cwd} model=${session.modelState.currentModelId}\n`,
     );
+    const webSearchWarning = webSearchConfigWarning(loadConfig().webSearch);
+    if (webSearchWarning) {
+      process.stderr.write(`[transcode] ${webSearchWarning}\n`);
+    }
     return sessionNewResult(session);
   }
 }

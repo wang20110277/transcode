@@ -312,7 +312,11 @@ export async function runAgentLoop(
     };
   }
 
-  const tools = options.tools ?? AGENT_TOOLS;
+  // Per-turn gating: disabled tools (e.g. unconfigured web_search) never
+  // reach the model, so it cannot waste turns calling them.
+  const tools = (options.tools ?? AGENT_TOOLS).filter(
+    (tool) => !tool.isEnabled || tool.isEnabled(),
+  );
   // Claude Code style: generous default cap (their subagents use 200),
   // overridable via TRANSCODE_MAX_TURNS. Hitting it is loud, never silent.
   const envTurns = Number(process.env.TRANSCODE_MAX_TURNS);

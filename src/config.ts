@@ -25,6 +25,8 @@ export interface TranscodeConfig {
   autoUpdate?: boolean | AutoUpdateConfig;
   /** Auto-compact on threshold: `false` disables, an object configures it. */
   autoCompact?: boolean | AutoCompactConfig;
+  /** Web search vendor + key (user-configured; validated by normalizeWebSearchConfig). */
+  webSearch?: unknown;
 }
 
 /** Raw (on-disk) shape of the autoUpdate config block. */

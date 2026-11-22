@@ -18,6 +18,7 @@ import {
   type ModelId,
 } from '../provider/provider.js';
 import { loadConfig, normalizeAutoCompact } from '../config.js';
+import { webSearchConfigWarning } from '../provider/web-search.js';
 import { runAgentLoop, type PermissionRequest } from '../agent/loop.js';
 import { createToolSession } from '../agent/tools/index.js';
 import { getPermissionMode } from '../agent/permission.js';
@@ -231,6 +232,16 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
       cancelled = true;
     };
   }, [updateNotice, addHistory, dragFlush]);
+  // Web search misconfiguration: one line on startup; a simply-absent
+  // section stays silent (never nags unconfigured users).
+  useEffect(() => {
+    const warning = webSearchConfigWarning(loadConfig().webSearch);
+    if (warning) {
+      addHistory({ input: '', output: warning });
+      dragFlush();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const pendingPermissionRef = useRef<{
     request: PermissionRequest;
     resolve: (allow: boolean) => void;
