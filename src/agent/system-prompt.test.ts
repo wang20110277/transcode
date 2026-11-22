@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, promises as fs, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, promises as fs, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { INIT_PROMPT, buildSystemPrompt, loadProjectContext } from './system-prompt.js';
@@ -85,5 +85,79 @@ describe('INIT_PROMPT', () => {
   test('instructs the agent to analyze the project and write TRANS.md only', () => {
     expect(INIT_PROMPT).toContain('TRANS.md');
     expect(INIT_PROMPT.toLowerCase()).toContain('analyze');
+  });
+});
+
+describe('user memory injection', () => {
+  const memory = {
+    globalInstructions: 'All projects run on bun.',
+    entries: [
+      {
+        name: 'commit-style-zh',
+        type: 'feedback' as const,
+        description: '中文 commit 惯例',
+        content: 'Commit messages written in Chinese.',
+      },
+    ],
+    omitted: ['stale-pointer'],
+  };
+
+  test('userMemory 有内容 → 渲染 ## User memory 段,位于 ## Project instructions 之前', () => {
+    const prompt = buildSystemPrompt({
+      cwd: '/tmp',
+      projectFiles: [{ path: 'TRANS.md', content: 'project rules' }],
+      userMemory: memory,
+    });
+    expect(prompt).toContain('## User memory');
+    expect(prompt.indexOf('## User memory')).toBeLessThan(
+      prompt.indexOf('## Project instructions'),
+    );
+  });
+
+  test('段内含 Global instructions 原文、索引行、各条 #### name 与正文、omitted 注名行', () => {
+    const prompt = buildSystemPrompt({ cwd: '/tmp', projectFiles: [], userMemory: memory });
+    expect(prompt).toContain('### Global instructions');
+    expect(prompt).toContain('All projects run on bun.');
+    expect(prompt).toContain('- [commit-style-zh](commit-style-zh.md) — 中文 commit 惯例');
+    expect(prompt).toContain('#### commit-style-zh');
+    expect(prompt).toContain('Commit messages written in Chinese.');
+    expect(prompt).toContain('(omitted: stale-pointer)');
+  });
+
+  test('userMemory 为空/缺省 → 不渲染该段;How to work 始终含 memory_save 引导行', () => {
+    const empty = buildSystemPrompt({
+      cwd: '/tmp',
+      projectFiles: [],
+      userMemory: { globalInstructions: null, entries: [], omitted: [] },
+    });
+    expect(empty).not.toContain('## User memory');
+    expect(empty).toContain('memory_save');
+
+    const absent = buildSystemPrompt({ cwd: '/tmp', projectFiles: [] });
+    expect(absent).not.toContain('## User memory');
+    expect(absent).toContain('memory_save');
+    expect(absent).toContain('verify it still holds');
+  });
+
+  test('loadProjectContext 集成:TRANSCODE_USER_DIR 根下放 TRANS.md + memory 条目 → context.userMemory 装载', async () => {
+    const dir = workspace();
+    const userRoot = mkdtempSync(path.join(tmpdir(), 'transcode-user-memory-'));
+    process.env.TRANSCODE_USER_DIR = userRoot;
+    try {
+      writeFileSync(path.join(userRoot, 'TRANS.md'), 'Global rule: bun only.\n');
+      mkdirSync(path.join(userRoot, 'memory'), { recursive: true });
+      writeFileSync(
+        path.join(userRoot, 'memory', 'pref-editor.md'),
+        '---\nname: pref-editor\ntype: user\ndescription: 编辑器偏好\n---\nVim keybindings everywhere.\n',
+      );
+
+      const context = await loadProjectContext(dir);
+      expect(context.userMemory?.globalInstructions).toBe('Global rule: bun only.');
+      expect(context.userMemory?.entries[0]?.name).toBe('pref-editor');
+      expect(context.userMemory?.omitted).toEqual([]);
+    } finally {
+      delete process.env.TRANSCODE_USER_DIR;
+      rmSync(userRoot, { recursive: true, force: true });
+    }
   });
 });

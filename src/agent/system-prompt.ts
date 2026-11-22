@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { getRouting } from '../provider/provider.js';
+import { loadUserMemory, renderMemoryIndex, type UserMemory } from './memory.js';
 
 const CONTEXT_FILES = ['TRANS.md', 'AGENTS.md', 'CLAUDE.md', 'TRANSCODE.md', '.transcode/AGENTS.md'];
 const MAX_CONTEXT_CHARS = 40_000;
@@ -22,6 +23,8 @@ export interface ProjectContext {
   cwd: string;
   gitBranch?: string;
   projectFiles: { path: string; content: string }[];
+  /** User-level memory (global instructions + memories); loaded alongside project files. */
+  userMemory?: UserMemory;
 }
 
 async function readOptional(file: string): Promise<string | null> {
@@ -79,7 +82,7 @@ export async function loadProjectContext(cwd: string): Promise<ProjectContext> {
     budget -= clipped.length;
   }
 
-  return { cwd, gitBranch: await gitBranch(cwd), projectFiles };
+  return { cwd, gitBranch: await gitBranch(cwd), projectFiles, userMemory: await loadUserMemory() };
 }
 
 export function buildSystemPrompt(
@@ -124,7 +127,26 @@ export function buildSystemPrompt(
     '- Never claim a command succeeded unless you actually ran it and saw the result.',
     '- When the task is complete, reply with a short summary of what changed and any verification performed.',
     '- If a tool fails, read the error and adapt instead of repeating the same call.',
+    '- When the user corrects your behavior or states a lasting preference, save it with ' +
+      'memory_save; before relying on a possibly stale memory, verify it still holds.',
   ];
+
+  const memory = context.userMemory;
+  if (memory && (memory.globalInstructions || memory.entries.length > 0)) {
+    sections.push('', '## User memory');
+    if (memory.globalInstructions) {
+      sections.push('', '### Global instructions', memory.globalInstructions);
+    }
+    if (memory.entries.length > 0) {
+      sections.push('', '### Memory', renderMemoryIndex(memory.entries).trim());
+      for (const entry of memory.entries) {
+        sections.push('', `#### ${entry.name}`, entry.content);
+      }
+      if (memory.omitted.length > 0) {
+        sections.push('', `(omitted: ${memory.omitted.join(', ')})`);
+      }
+    }
+  }
 
   if (context.projectFiles.length > 0) {
     sections.push('', '## Project instructions');
