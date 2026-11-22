@@ -277,3 +277,13 @@ describe('resolveContextTokens', () => {
       .toMatchObject({ tokens: 0, source: 'byModel' });
   });
 });
+
+describe('resolveContextTokens boolean master switch', () => {
+  test('autoCompact: false 布尔形态 → enabled:false(不被静默重开)', async () => {
+    const { resolveContextTokens } = await import('./compact.js');
+    expect(resolveContextTokens('x', {}, { autoCompact: false } as never))
+      .toMatchObject({ enabled: false });
+    expect(resolveContextTokens('x', {}, { autoCompact: true } as never))
+      .toMatchObject({ enabled: true });
+  });
+});

@@ -113,3 +113,25 @@ describe('context budget choices', () => {
     expect(CONTEXT_BUDGET_CHOICES.some(c => c.label === '自定义…')).toBe(true);
   });
 });
+
+describe('writeContextTokens boolean form', () => {
+  test('autoCompact: false 时写入保留 enabled:false(总闸不被改掉)', async () => {
+    const { writeContextTokens } = await import('./config.js');
+    const { readFileSync, writeFileSync, rmSync, mkdtempSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const path = await import('node:path');
+    const root = mkdtempSync(path.join(tmpdir(), 'transcode-ctx-bool-'));
+    const configPath = path.join(root, 'c.json');
+    process.env.TRANSCODE_CONFIG_PATH = configPath;
+    try {
+      writeFileSync(configPath, JSON.stringify({ autoCompact: false }));
+      writeContextTokens('m', 1_000_000);
+      const saved = JSON.parse(readFileSync(configPath, 'utf8'));
+      expect(saved.autoCompact.enabled).toBe(false);
+      expect(saved.autoCompact.byModel).toEqual({ m: 1_000_000 });
+    } finally {
+      delete process.env.TRANSCODE_CONFIG_PATH;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

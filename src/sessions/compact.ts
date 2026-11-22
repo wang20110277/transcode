@@ -73,10 +73,16 @@ const DEFAULT_CONTEXT_TOKENS = 100_000;
 export function resolveContextTokens(
   modelId: string,
   env: Record<string, string | undefined> = process.env,
-  config: { autoCompact?: Record<string, unknown> } = loadConfig() as { autoCompact?: Record<string, unknown> },
+  config: { autoCompact?: unknown } = loadConfig(),
 ): ContextBudget {
-  const auto = config.autoCompact ?? {};
-  const enabled = auto.enabled !== false;
+  // The master switch accepts the boolean form too (autoCompact: false);
+  // ?? would silently re-enable compaction for explicitly-disabled users.
+  const raw = config.autoCompact;
+  const auto =
+    raw && typeof raw === 'object' && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : {};
+  const enabled = raw !== false && auto.enabled !== false;
 
   const byModel = (auto.byModel as Record<string, number> | undefined)?.[modelId];
   if (typeof byModel === 'number') return { tokens: byModel, source: 'byModel', enabled };

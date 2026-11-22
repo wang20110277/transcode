@@ -157,3 +157,10 @@ describe('search command registration', () => {
     expect(getCommands().map((c) => c.name)).toContain('search');
   });
 });
+
+describe('compact command description', () => {
+  test('无参查看语义在桩文案中可发现', () => {
+    const compact = findCommand('compact');
+    expect(compact?.description).toContain('查看上下文预算');
+  });
+});

@@ -151,7 +151,9 @@ export function saveConfig(config: TranscodeConfig): void {
 export function writeContextTokens(modelId: string, tokens: number | null): void {
   const config = loadConfig();
   const raw = config.autoCompact;
-  const auto: AutoCompactConfig = raw && typeof raw === 'object' ? { ...raw } : {};
+  // Preserve the boolean off-switch: autoCompact:false must stay off after write.
+  const auto: AutoCompactConfig =
+    raw === false ? { enabled: false } : raw && typeof raw === 'object' ? { ...raw } : {};
   const byModel = { ...(auto.byModel ?? {}) };
   if (tokens === null) delete byModel[modelId];
   else byModel[modelId] = tokens;

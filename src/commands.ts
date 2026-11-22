@@ -178,7 +178,7 @@ const commands: Command[] = [
   },
   {
     name: 'compact',
-    description: '压缩当前会话:旧轮提炼为前情提要,默认保留最近 1 轮(/compact <N> 自定义)',
+    description: '无参查看上下文预算;/compact <N> 手动压缩(保留最近 N 轮,默认 1)',
     // Intercepted by the REPL.
     execute: () => ({ output: 'Compacting…' }),
   },

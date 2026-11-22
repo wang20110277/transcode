@@ -1057,19 +1057,15 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
         setSavedInput('');
         dragFlush();
       };
-      if (!conversationRef.current) {
-        addHistory({ input: trimmed, output: '当前没有进行中的会话,先聊几句或 /resume 恢复一个。' });
-        finishCompact();
-        return;
-      }
       // No args: show the effective context-budget config instead of running.
+      // (Before the conversation guard — viewing config needs no session.)
       if (args.length === 0 || !args[0]?.trim()) {
         const budget = resolveContextTokens(ctx.modelId);
         const sourceLabel =
           budget.source === 'byModel' ? '按模型(byModel)' :
           budget.source === 'env' ? '环境变量' :
           budget.source === 'global' ? '全局配置' : '默认';
-        const approxChars = Math.round(budget.tokens * 2.5); // mixed CJK/ASCII口径
+        const approxChars = budget.tokens * 4; // 英文口径;中文约 ×1.5
         addHistory({
           input: trimmed,
           output:
@@ -1078,6 +1074,11 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
             `自动压缩:${budget.enabled ? '开' : '关'} · keepTurns:${normalizeAutoCompact(loadConfig().autoCompact).keepTurns}\n` +
             `配置:autoCompact.byModel / contextTokens(~/.transcode.json),/models 流程可交互设置`,
         });
+        finishCompact();
+        return;
+      }
+      if (!conversationRef.current) {
+        addHistory({ input: trimmed, output: '当前没有进行中的会话,先聊几句或 /resume 恢复一个。' });
         finishCompact();
         return;
       }
@@ -1236,6 +1237,20 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       return;
     }
     if (key.escape) {
+      // Budget menu / custom input: Esc = SKIP (keep current budget) and
+      // still apply the verified model switch — the generic phase cancel
+      // below must never discard a completed model selection.
+      if (
+        (phase === 'model_context' || phase === 'model_context_custom') &&
+        pendingSwitchRef.current
+      ) {
+        const pending = pendingSwitchRef.current;
+        pendingSwitchRef.current = null;
+        setPhase('idle');
+        commitInput('');
+        applyModelSwitch(pending.spec, pending.displayName, pending.apiKey, pending.message, pending.served);
+        return;
+      }
       // While generating, Esc cancels instead of exiting.
       if (busyRef.current) {
         // Busy covers both a live agent turn (abort it) and async
@@ -1301,6 +1316,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
         pendingSwitchRef.current = null;
         writeContextTokens(pending.spec, choice.tokens);
         setPhase('idle');
+        commitInput('');
         applyModelSwitch(pending.spec, pending.displayName, pending.apiKey, pending.message, pending.served);
         return;
       }
