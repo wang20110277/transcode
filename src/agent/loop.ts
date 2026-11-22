@@ -277,6 +277,9 @@ const MALFORMED_TOOL_CALL_BREAKER = 3;
 /** Auto-retries for provider empty responses (thinking-model silent stops). */
 const EMPTY_RESPONSE_RETRIES = 2;
 
+/** Auto-retries for dropped streams (connection reset / gateway cut). */
+const STREAM_ERROR_RETRIES = 2;
+
 const MALFORMED_GUIDANCE =
   'Your last tool calls had malformed JSON arguments and were never executed. ' +
   'Do NOT retry the same payload. Write the file in smaller sections, or use a ' +
@@ -401,22 +404,53 @@ export async function runAgentLoop(
     let text = '';
     let finalChunk: AIMessageChunk | undefined;
 
-    const stream = await runnable.stream(messages, {
-      signal: options.signal,
-    });
+    // Stream acquisition + consumption with transport retry: a dropped
+    // connection mid-stream (reset, gateway cut, 5xx after SDK retries)
+    // restarts the WHOLE round on the same messages. Partial text from the
+    // dead attempt is discarded (already streamed to the UI, but the loop's
+    // authoritative text/tool state resets — the REPL replaces the live
+    // region with the retried round's output as it lands).
+    let streamErrors = 0;
+    let consumed = false;
+    while (!consumed) {
+      partials.clear();
+      finalChunk = undefined;
+      text = '';
+      try {
+        const stream = await runnable.stream(messages, {
+          signal: options.signal,
+        });
 
-    for await (const chunk of stream) {
-      if (options.signal?.aborted) return { stopReason: 'cancelled', messages };
-      finalChunk = chunk;
+        for await (const chunk of stream) {
+          if (options.signal?.aborted) return { stopReason: 'cancelled', messages };
+          finalChunk = chunk;
 
-      const delta = textFromContent(chunk.content);
-      if (delta) {
-        text += delta;
-        await options.onEvent({ type: 'text', text: delta });
-      }
+          const delta = textFromContent(chunk.content);
+          if (delta) {
+            text += delta;
+            await options.onEvent({ type: 'text', text: delta });
+          }
 
-      for (const toolCallChunk of chunk.tool_call_chunks ?? []) {
-        mergeToolCallChunk(partials, toolCallChunk);
+          for (const toolCallChunk of chunk.tool_call_chunks ?? []) {
+            mergeToolCallChunk(partials, toolCallChunk);
+          }
+        }
+        consumed = true;
+      } catch (error) {
+        if (options.signal?.aborted) return { stopReason: 'cancelled', messages };
+        streamErrors++;
+        if (streamErrors > STREAM_ERROR_RETRIES) {
+          await options.onEvent({
+            type: 'text',
+            text: `\n⚠ 模型连接失败(已重试 ${STREAM_ERROR_RETRIES} 轮):${error instanceof Error ? error.message : String(error)}`,
+          });
+          messages.push(new AIMessage({ content: text, tool_calls: [] }));
+          return { stopReason: 'end_turn', messages };
+        }
+        await options.onEvent({
+          type: 'text',
+          text: `\n⟳ 连接中断,自动重试(第 ${streamErrors}/${STREAM_ERROR_RETRIES} 轮)…`,
+        });
       }
     }
 

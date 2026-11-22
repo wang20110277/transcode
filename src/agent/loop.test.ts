@@ -825,3 +825,66 @@ describe('empty-response recovery', () => {
     expect(events.some((e) => e.type === 'text')).toBe(false);
   });
 });
+
+describe('stream-error retry', () => {
+  test('流中途断开 → 标注重试,同消息重发后成功', async () => {
+    let attempt = 0;
+    const flaky = {
+      bindTools: () => ({
+        async stream() {
+          attempt++;
+          if (attempt === 1) {
+            return (async function* () {
+              yield new AIMessageChunk({ content: '半截' });
+              throw new Error('fetch failed: connection reset');
+            })();
+          }
+          return (async function* () {
+            yield new AIMessageChunk({ content: '完整的回答。' });
+          })();
+        },
+      }),
+    };
+    const events: Array<{ type: string; text?: string }> = [];
+    const result = await runAgentLoop({
+      model: flaky as never,
+      cwd: '/tmp',
+      messages: [],
+      systemPrompt: 'test',
+      tools: [fakeTool],
+      onEvent: (event) => events.push(event as never),
+    });
+    expect(result.stopReason).toBe('end_turn');
+    const texts = events.filter((e) => e.type === 'text').map((e) => e.text ?? '');
+    expect(texts.some((t) => t.includes('重试(第 1/2 轮)'))).toBe(true);
+    expect(texts.join('')).toContain('完整的回答');
+    // 半截文本已流出无法收回,但顺序必须是:半截 → 重试标注 → 完整回答
+    const joined = texts.join('');
+    expect(joined.indexOf('半截')).toBeLessThan(joined.indexOf('连接中断'));
+    expect(joined.indexOf('连接中断')).toBeLessThan(joined.indexOf('完整的回答'));
+  });
+
+  test('连续断流 2 次 → 第 3 次仍抛则回合失败并 ⚠', async () => {
+    let attempt = 0;
+    const dead = {
+      bindTools: () => ({
+        async stream() {
+          attempt++;
+          throw new Error('always down');
+        },
+      }),
+    };
+    const events: Array<{ type: string; text?: string }> = [];
+    const result = await runAgentLoop({
+      model: dead as never,
+      cwd: '/tmp',
+      messages: [],
+      systemPrompt: 'test',
+      tools: [fakeTool],
+      onEvent: (event) => events.push(event as never),
+    });
+    expect(attempt).toBe(3); // 1 + 2 retries
+    expect(result.stopReason).toBe('end_turn');
+    expect(events.some((e) => e.type === 'text' && (e.text ?? '').includes('⚠'))).toBe(true);
+  });
+});
