@@ -13,7 +13,7 @@ function Banner({ modelId, cwd, envLabel }: { modelId: string; cwd: string; envL
   const models = getAvailableModels();
   const current = models.find(m => m.id === modelId);
 
-  const logo = bannerLines('T R A N S C O D E  ·  Multi-model Agent');
+  const logo = bannerLines('T R A N S C O D E  ·  Multi-Model Agent');
 
   return (
     <Box flexDirection="column" marginBottom={1}>

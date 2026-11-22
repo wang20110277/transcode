@@ -3,7 +3,7 @@ import { bannerLines } from './banner.js';
 
 describe('bannerLines', () => {
   test('renders a closed rectangle with aligned sides', () => {
-    const lines = bannerLines('T R A N S C O D E  ·  Multi-model Agent').split('\n');
+    const lines = bannerLines('T R A N S C O D E  ·  Multi-Model Agent').split('\n');
     expect(lines.length).toBe(3);
     expect(lines[0]!.startsWith('┌')).toBe(true);
     expect(lines[0]!.endsWith('┐')).toBe(true);
