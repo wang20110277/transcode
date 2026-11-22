@@ -48,6 +48,7 @@ import {
 } from './slash-completion.js';
 import { resolveSubmitInput } from './submit.js';
 import { submitSearchApiKey } from './search-setup.js';
+import { reduceQueue, type QueueAction } from './input-queue.js';
 import { historyRule } from './history-rule.js';
 import { renderDiff } from './diff-render.js';
 import { createTurnStats, recordCall, renderTurnLog, shouldCollapse, summaryLine } from './turn-summary.js';
@@ -166,6 +167,19 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
       return next;
     });
   }, []);
+
+  // Busy-input queue: prompts typed while the agent works. Natural turn end
+  // auto-continues the head; cancel/error freezes (manual Enter resumes);
+  // Esc at idle clears. Ref mirror avoids stale closures in runChat's finally.
+  const [inputQueue, setInputQueue] = useState<string[]>([]);
+  const inputQueueRef = useRef<string[]>([]);
+  const applyQueue = useCallback((action: QueueAction) => {
+    const next = reduceQueue(inputQueueRef.current, action);
+    inputQueueRef.current = next.queue;
+    setInputQueue(next.queue);
+    return next;
+  }, []);
+  const handleSubmitRef = useRef<(raw: string) => Promise<void>>(async () => {});
 
   // ---- chat state ----
   const [busy, setBusy] = useState(false);
@@ -448,6 +462,7 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         appendChatOutput('［plan 模式：只读探索，产出方案，PLAN READY 后可让我执行］\n');
       }
 
+      let endedNaturally = false;
       try {
         const provider =
           process.env.TRANSCODE_MOCK === '1'
@@ -588,7 +603,11 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
             persist();
           })();
         }
-        if (controller.signal.aborted) appendChatOutput('\n(cancelled)');
+        if (controller.signal.aborted) {
+          appendChatOutput('\n(cancelled)');
+        } else {
+          endedNaturally = true;
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         appendChatOutput(`\n⚠ ${message}`);
@@ -602,9 +621,15 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         // The agent may have created/removed files; rebuild @-completion list.
         setFileList(null);
         dragFlush();
+        // Queue continuation: only a naturally-ended turn auto-submits the
+        // next queued prompt; cancel and error freeze it (Enter resumes).
+        const queued = applyQueue(endedNaturally ? { type: 'turnEnded' } : { type: 'frozen' });
+        if (endedNaturally && queued.submit) {
+          void handleSubmitRef.current(queued.submit);
+        }
       }
     },
-    [ctx.modelId, addHistory, appendChatOutput, askInTerminal, setBusyBoth, dragFlush],
+    [ctx.modelId, addHistory, appendChatOutput, askInTerminal, setBusyBoth, dragFlush, applyQueue],
   );
 
   const enterModelSelect = useCallback(() => {
@@ -1027,6 +1052,8 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
     setHistoryIndex(-1);
     setSavedInput('');
   }, [exit, ctx, phase, handleApiKey, addHistory, enterModelSelect, commitInput, dragFlush, runChat]);
+  // Late-bound so runChat's finally can auto-continue queued prompts.
+  handleSubmitRef.current = handleSubmit;
 
   useInput((ch, key) => {
     if (process.env.TRANSCODE_DEBUG_KEYS === '1') {
@@ -1064,6 +1091,11 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         setVendor(null);
         commitInput('');
         addHistory({ input: '', output: 'Cancelled.' });
+        return;
+      }
+      if (inputQueueRef.current.length > 0) {
+        applyQueue({ type: 'clear' });
+        addHistory({ input: '', output: '(队列已清空)' });
         return;
       }
       exit();
@@ -1273,7 +1305,21 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
     }
 
     if (key.return) {
-      if (busyRef.current) return; // still generating; Esc cancels
+      if (busyRef.current) {
+        // Still generating: queue the prompt; it submits when the turn ends
+        // naturally (cancel/error freeze it — idle empty-Enter resumes).
+        const trimmed = inputRef.current.trim();
+        if (trimmed) {
+          applyQueue({ type: 'enqueue', text: trimmed });
+          commitInput('');
+        }
+        return;
+      }
+      if (!inputRef.current.trim() && inputQueueRef.current.length > 0) {
+        const next = applyQueue({ type: 'submitNext' });
+        if (next.submit) void handleSubmit(next.submit);
+        return;
+      }
       handleSubmit(inputRef.current);
       return;
     }
@@ -1476,6 +1522,16 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
 
       {phase !== 'model_select' && phase !== 'session_select' && (
         <Box flexDirection="column">
+          {inputQueue.length > 0 && (
+            <Box flexDirection="column" marginLeft={2}>
+              {inputQueue.map((text, i) => (
+                <Text key={i} color="gray" dimColor>⏎ {text}</Text>
+              ))}
+              {!busy && (
+                <Text color="gray" dimColor>(queued {inputQueue.length} — Enter 续发,Esc 清空)</Text>
+              )}
+            </Box>
+          )}
           <Text color="gray" dimColor>{historyRule(stdout?.columns ?? 80)}</Text>
           <Box>
             <Text color={phase === 'idle' ? 'green' : 'yellow'}>{promptLabel}</Text>
