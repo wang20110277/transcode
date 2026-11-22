@@ -173,3 +173,37 @@ describe('omitted-only user memory', () => {
     expect(prompt).toContain('(omitted: huge)');
   });
 });
+
+describe('web tool guidance', () => {
+  test('webSearch 已配置 → How to work 含 web_search 优先于记忆的引导', async () => {
+    const configDir = await fs.mkdtemp(path.join(tmpdir(), 'transcode-prompt-web-'));
+    process.env.TRANSCODE_CONFIG_PATH = path.join(configDir, 'config.json');
+    try {
+      writeFileSync(
+        path.join(configDir, 'config.json'),
+        JSON.stringify({ webSearch: { provider: 'tavily', apiKey: 'tvly-x' } }),
+      );
+      const prompt = buildSystemPrompt({ cwd: '/tmp', projectFiles: [] });
+      expect(prompt).toContain('web_search');
+      expect(prompt).toContain('web_fetch');
+      expect(prompt.toLowerCase()).toContain('outside this workspace');
+    } finally {
+      delete process.env.TRANSCODE_CONFIG_PATH;
+      await fs.rm(configDir, { recursive: true, force: true });
+    }
+  });
+
+  test('未配置 → 不提 web_search(与工具隐藏一致),仍提 web_fetch', () => {
+    const configDir = mkdtempSync(path.join(tmpdir(), 'transcode-prompt-noweb-'));
+    process.env.TRANSCODE_CONFIG_PATH = path.join(configDir, 'empty.json');
+    try {
+      writeFileSync(path.join(configDir, 'empty.json'), '{}');
+      const prompt = buildSystemPrompt({ cwd: '/tmp', projectFiles: [] });
+      expect(prompt).not.toContain('web_search');
+      expect(prompt).toContain('web_fetch');
+    } finally {
+      delete process.env.TRANSCODE_CONFIG_PATH;
+      rmSync(configDir, { recursive: true, force: true });
+    }
+  });
+});

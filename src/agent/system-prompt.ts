@@ -2,6 +2,8 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { getRouting } from '../provider/provider.js';
 import { loadUserMemory, renderMemoryIndex, type UserMemory } from './memory.js';
+import { loadConfig } from '../config.js';
+import { normalizeWebSearchConfig } from '../provider/web-search.js';
 
 const CONTEXT_FILES = ['TRANS.md', 'AGENTS.md', 'CLAUDE.md', 'TRANSCODE.md', '.transcode/AGENTS.md'];
 const MAX_CONTEXT_CHARS = 40_000;
@@ -34,6 +36,26 @@ async function readOptional(file: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * Web tool guidance, gated like the tools themselves: web_search is only
+ * advertised when configured (the tool is hidden from the table otherwise);
+ * web_fetch is always available.
+ */
+function webToolLines(): string[] {
+  const searchConfigured = normalizeWebSearchConfig(loadConfig().webSearch) !== null;
+  return [
+    ...(searchConfigured
+      ? [
+          '- Questions about anything outside this workspace — unfamiliar terms, latest ' +
+            'releases, current documentation — search the web with web_search BEFORE answering ' +
+            'from memory; read a promising result with web_fetch.',
+        ]
+      : []),
+    '- Use web_fetch to read a specific URL (docs, API responses, raw files) when the user ' +
+      'points at one.',
+  ];
 }
 
 /** Advertises configured role routing so the model knows it can delegate. */
@@ -116,6 +138,7 @@ export function buildSystemPrompt(
       'then state a short plan and write the result. Exploration is not the deliverable.',
     '- Multi-step tasks (3+ steps): create the list with todo_write first, keep exactly one ' +
       'step in_progress, and mark steps completed as you finish them.',
+    ...webToolLines(),
     ...roleRoutingLines(),
     '- Reporting counts (tests, checks, matches): grep -c counts matching LINES, including ' +
       'definitions like `def check(` — read the actual item list instead of trusting a raw count.',
