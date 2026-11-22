@@ -28,3 +28,15 @@ describe('reduceQueue', () => {
     expect(reduceQueue(['a'], { type: 'clear' })).toEqual({ queue: [] });
   });
 });
+
+describe('shouldResumeQueue', () => {
+  test('仅 idle + 空输入 + 队列非空才续发;apikey 等 phase 的空回车不归队列', async () => {
+    const { shouldResumeQueue } = await import('./input-queue.js');
+    expect(shouldResumeQueue('idle', '', 2)).toBe(true);
+    expect(shouldResumeQueue('model_apikey', '', 2)).toBe(false);
+    expect(shouldResumeQueue('search_apikey', '', 2)).toBe(false);
+    expect(shouldResumeQueue('idle', '  ', 1)).toBe(true);
+    expect(shouldResumeQueue('idle', 'text', 1)).toBe(false);
+    expect(shouldResumeQueue('idle', '', 0)).toBe(false);
+  });
+});

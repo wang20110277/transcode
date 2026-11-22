@@ -35,3 +35,12 @@ export function reduceQueue(queue: string[], action: QueueAction): QueueState {
       return { queue: [] };
   }
 }
+
+/**
+ * Empty-Enter resumes the queue ONLY at the idle prompt: the apikey phases
+ * have their own empty-Enter contract ("reuse the saved key"), and routing
+ * their Enter to the queue would swallow a queued prompt as if it were a key.
+ */
+export function shouldResumeQueue(phase: string, raw: string, queueLength: number): boolean {
+  return phase === 'idle' && !raw.trim() && queueLength > 0;
+}

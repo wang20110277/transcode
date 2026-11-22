@@ -48,7 +48,7 @@ import {
 } from './slash-completion.js';
 import { resolveSubmitInput } from './submit.js';
 import { submitSearchApiKey } from './search-setup.js';
-import { reduceQueue, type QueueAction } from './input-queue.js';
+import { reduceQueue, shouldResumeQueue, type QueueAction } from './input-queue.js';
 import { historyRule } from './history-rule.js';
 import { renderDiff } from './diff-render.js';
 import { createTurnStats, recordCall, renderTurnLog, shouldCollapse, summaryLine } from './turn-summary.js';
@@ -1315,7 +1315,7 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         }
         return;
       }
-      if (!inputRef.current.trim() && inputQueueRef.current.length > 0) {
+      if (shouldResumeQueue(phase, inputRef.current, inputQueueRef.current.length)) {
         const next = applyQueue({ type: 'submitNext' });
         if (next.submit) void handleSubmit(next.submit);
         return;
@@ -1527,7 +1527,7 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
               {inputQueue.map((text, i) => (
                 <Text key={i} color="gray" dimColor>⏎ {text}</Text>
               ))}
-              {!busy && (
+              {!busy && phase === 'idle' && (
                 <Text color="gray" dimColor>(queued {inputQueue.length} — Enter 续发,Esc 清空)</Text>
               )}
             </Box>
