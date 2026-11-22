@@ -23,6 +23,7 @@ export const memorySaveTool: AgentTool = {
     content: z.string().min(1).describe('The fact itself'),
     description: z
       .string()
+      .nullable()
       .optional()
       .describe('One-line hook for the index; defaults to the first line of content'),
   }),

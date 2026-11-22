@@ -98,7 +98,11 @@ export const webFetchTool: AgentTool = {
   isMutating: false,
   schema: z.object({
     url: z.string().url().describe('Absolute URL to fetch'),
-    prompt: z.string().optional().describe('What to look for on the page (guidance only)'),
+    prompt: z
+      .string()
+      .nullable()
+      .optional()
+      .describe('What to look for on the page (guidance only)'),
   }),
   title: (input) => `web_fetch ${input.url}`,
   async execute(input) {

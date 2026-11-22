@@ -13,7 +13,14 @@ export const webSearchTool: AgentTool = {
   isEnabled: () => normalizeWebSearchConfig(loadConfig().webSearch) !== null,
   schema: z.object({
     query: z.string().min(1).describe('Search query'),
-    maxResults: z.number().int().min(1).max(20).optional().describe('Hits to return (default 5)'),
+    maxResults: z
+      .number()
+      .int()
+      .min(1)
+      .max(20)
+      .nullable()
+      .optional()
+      .describe('Hits to return (default 5)'),
   }),
   title: (input) => `web_search ${input.query}`,
   async execute(input, ctx) {
