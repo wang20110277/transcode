@@ -1,4 +1,4 @@
-import { Box, Text, useInput, useApp, useStdout } from 'ink';
+import { Box, Static, Text, useInput, useApp, useStdout } from 'ink';
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import path from 'node:path';
 import { executeCommand, findCommand, getCommands, type CommandContext } from '../commands.js';
@@ -52,7 +52,8 @@ import { reduceQueue, shouldResumeQueue, type QueueAction } from './input-queue.
 import { createStreamThrottler } from './stream-throttle.js';
 import { historyRule } from './history-rule.js';
 import { renderDiff } from './diff-render.js';
-import { createTurnStats, recordCall, renderCollapsed, shouldCollapse, summaryLine } from './turn-summary.js';
+import { createTurnStats, recordCall, renderCollapsed, renderExpansion, shouldCollapse, summaryLine } from './turn-summary.js';
+import { sliceLiveTail } from './live-view.js';
 import { buildSystemPrompt, INIT_PROMPT, loadProjectContext } from '../agent/system-prompt.js';
 import { HumanMessage, SystemMessage, type BaseMessage } from '@langchain/core/messages';
 
@@ -100,7 +101,18 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
     inputRef.current = next;
     setInput(next);
   }, []);
-  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  // Single commit for history + live stream: the legacy reconciler paints
+  // per commit, so landing a turn and clearing the live region in two
+  // commits flashes one duplicated tail frame (spec ruling #6).
+  interface ChatView {
+    history: HistoryEntry[];
+    liveOutput: string;
+    /** Input echo shown at the top of the live region while a turn runs. */
+    turnInput: string;
+  }
+  const [chat, setChat] = useState<ChatView>({ history: [], liveOutput: '', turnInput: '' });
+  const liveOutputRef = useRef('');
+  const turnDisplayRef = useRef('');
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [savedInput, setSavedInput] = useState('');
   const [phase, setPhase] = useState<PromptPhase>('idle');
@@ -150,23 +162,13 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
   }, []);
 
   const addHistory = useCallback((entry: HistoryEntry) => {
-    setHistory(prev => [...prev, entry]);
+    setChat(prev => ({ ...prev, history: [...prev.history, entry] }));
   }, []);
 
-  /** ctrl+o verbose view: collapsed turns show their hidden tool-log detail. */
-  const [verboseTools, setVerboseTools] = useState(false);
-
-  const attachHiddenLines = useCallback((lines: string[]) => {
-    setHistory(prev => {
-      if (prev.length === 0 || lines.length === 0) return prev;
-      const next = [...prev];
-      const last = next[next.length - 1];
-      next[next.length - 1] = {
-        ...last,
-        hiddenLines: [...(last.hiddenLines ?? []), ...lines],
-      };
-      return next;
-    });
+  /** Turn-time streaming target: the live region (never mutates history). */
+  const appendLive = useCallback((chunk: string) => {
+    liveOutputRef.current += chunk;
+    setChat(prev => ({ ...prev, liveOutput: prev.liveOutput + chunk }));
   }, []);
 
   // Busy-input queue: prompts typed while the agent works. Natural turn end
@@ -203,18 +205,16 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
   const sessionPickerRef = useRef<SessionRecord[]>([]);
   /** Load a record into the live conversation; shared by /resume arg and picker paths. */
   const applyResume = useCallback(
-    (record: SessionRecord, inputLine: string) => {
+    (record: SessionRecord, _inputLine: string) => {
       conversationRef.current = { id: record.id, createdAt: record.createdAt, titled: true };
       conversationTitleRef.current = record.title;
       summaryRef.current = record.summary ?? null;
       messagesRef.current = record.messages;
       toolSessionRef.current = createToolSession(process.cwd());
-      addHistory({
-        input: inputLine,
-        output: `已恢复「${record.title}」（${record.messages.length} 条消息，${record.model}），继续对话。`,
-      });
+      // The confirmation line now lands WITH the streamed digest in
+      // resumeWith (live region hosts the digest while compacting).
     },
-    [addHistory],
+    [],
   );
 
   // @-mention file completion: lazy file list, active query, dismissed flag.
@@ -307,8 +307,8 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
   /** Shared resume flow: auto-compact over-long sessions, then load + render. */
   const resumeWith = async (record: SessionRecord, inputLine: string, keepTurns = DEFAULT_KEEP_TURNS) => {
     const { turns } = splitTurns(record.messages);
-    // Load first so the confirmation entry hosts the streamed digest.
     applyResume(record, inputLine);
+    const confirm = `已恢复「${record.title}」（${record.messages.length} 条消息，${record.model}），继续对话。`;
     let oldTurns = 0;
     if (turns.length > keepTurns && process.env.TRANSCODE_MOCK !== '1') {
       setBusyBoth(true);
@@ -322,14 +322,26 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
           // Manual success heals the auto-compact breaker too.
           autoCompactFailuresRef.current = 0;
           autoCompactWarnedRef.current = false;
+          landLive({ input: inputLine, prefix: confirm });
         } else {
-          addHistory({ input: '', output: `⚠ 提炼失败(${outcome.error ?? '未知'}),已恢复完整对话。` });
+          // Failure: partial digest + warning merged as ONE entry (ruling #5).
+          landLive({
+            input: inputLine,
+            prefix: confirm,
+            suffix: `\n⚠ 提炼失败(${outcome.error ?? '未知'}),已恢复完整对话。`,
+          });
         }
       } catch {
-        addHistory({ input: '', output: '⚠ 提炼失败,已恢复完整对话。' });
+        landLive({
+          input: inputLine,
+          prefix: confirm,
+          suffix: '\n⚠ 提炼失败,已恢复完整对话。',
+        });
       } finally {
         setBusyBoth(false);
       }
+    } else {
+      addHistory({ input: inputLine, output: confirm });
     }
     // Restore in the original conversation form: each message becomes a
     // history entry (rule-framed questions, full-length replies).
@@ -338,16 +350,6 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
     }
     dragFlush();
   };
-
-  const appendChatOutput = useCallback((chunk: string) => {
-    setHistory(prev => {
-      if (prev.length === 0) return prev;
-      const next = [...prev];
-      const last = next[next.length - 1];
-      next[next.length - 1] = { ...last, output: last.output + chunk };
-      return next;
-    });
-  }, []);
 
   /**
    * Frame-level coalescing for streaming output. Stock Ink re-renders
@@ -358,11 +360,44 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
    */
   const streamAppendRef = useRef<ReturnType<typeof createStreamThrottler> | null>(null);
   if (streamAppendRef.current === null) {
-    streamAppendRef.current = createStreamThrottler(appendChatOutput, 32);
+    streamAppendRef.current = createStreamThrottler(appendLive, 32);
   }
   const streamAppend = (chunk: string): void => {
     streamAppendRef.current?.push(chunk);
   };
+
+  /** Show the input echo at the top of the live region while a turn runs. */
+  const beginTurnLive = useCallback((display: string) => {
+    turnDisplayRef.current = display;
+    setChat(prev => ({ ...prev, turnInput: display }));
+  }, []);
+
+  /**
+   * Land the streamed live output as one static history entry and clear the
+   * live region in a single commit. Flushes the throttler first and builds
+   * output = prefix + live + suffix AFTER the flush — never pre-capture the
+   * live text at the call site (the tail may sit in the throttler). Ruling #6.
+   */
+  const landLive = useCallback(
+    (entry: {
+      input: string;
+      prefix?: string;
+      suffix?: string;
+      output?: string;
+      hiddenLines?: string[];
+    }) => {
+      streamAppendRef.current?.flush();
+      const output =
+        entry.output ?? `${entry.prefix ?? ''}${liveOutputRef.current}${entry.suffix ?? ''}`;
+      liveOutputRef.current = '';
+      setChat(prev => ({
+        history: [...prev.history, { input: entry.input, output, hiddenLines: entry.hiddenLines }],
+        liveOutput: '',
+        turnInput: '',
+      }));
+    },
+    [],
+  );
 
   /**
    * One shared compaction run for /resume and /compact: fast-model routing
@@ -373,7 +408,7 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
     record: SessionRecord,
     keepTurns: number,
   ): Promise<{ compressed: boolean; record: SessionRecord; error?: string }> => {
-    appendChatOutput('\n正在提炼前情提要…\n');
+    streamAppend('\n正在提炼前情提要…\n');
     try {
       const outcome = await compressSession(
         record,
@@ -381,12 +416,10 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         keepTurns,
         (delta) => streamAppend(delta),
       );
-      streamAppendRef.current?.flush();
-      appendChatOutput('\n\n');
+      streamAppend('\n\n');
       return outcome;
     } catch (error) {
-      streamAppendRef.current?.flush();
-      appendChatOutput('\n\n');
+      streamAppend('\n\n');
       return {
         compressed: false,
         record,
@@ -426,9 +459,8 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
     if (autoCompactFailuresRef.current >= 3) return;
     if (!shouldAutoCompact(messagesRef.current, cfg)) return;
     try {
-      // Dedicated host entry before the question echo, so the digest neither
-      // mixes into the turn entry nor receives the turn's streamed reply.
-      addHistory({ input: '', output: '' });
+      // Digest streams into the live region; it lands as its own entry here
+      // (before the turn's echo) and never mixes into the turn entry.
       const record = buildSessionRecord({
         id: conversationRef.current.id,
         title: conversationTitleRef.current,
@@ -442,8 +474,9 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
       if (!outcome.compressed) {
         // Without an error it is a no-op (≤ keepTurns turns — e.g. one giant
         // turn over threshold): nothing compressible, skip without touching
-        // the breaker.
+        // the breaker. The streamed banner still lands as a stub entry.
         if (outcome.error) throw new Error(outcome.error);
+        landLive({ input: '' });
         return;
       }
       summaryRef.current = outcome.record.summary ?? null;
@@ -451,6 +484,7 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
       saveSession(outcome.record);
       autoCompactFailuresRef.current = 0;
       autoCompactWarnedRef.current = false;
+      landLive({ input: '' });
       for (const entry of transcriptEntries(summaryRef.current, messagesRef.current)) {
         addHistory(entry);
       }
@@ -458,13 +492,15 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
       autoCompactFailuresRef.current += 1;
       const reason = error instanceof Error ? error.message : String(error);
       if (autoCompactFailuresRef.current >= 3) {
-        addHistory({
+        landLive({
           input: '',
-          output: `⚠ 自动压缩已暂停(连续 3 次失败,最后原因:${reason})。可 /compact 手动压缩或检查 routing.compact 配置。`,
+          suffix: `\n⚠ 自动压缩已暂停(连续 3 次失败,最后原因:${reason})。可 /compact 手动压缩或检查 routing.compact 配置。`,
         });
       } else if (!autoCompactWarnedRef.current) {
         autoCompactWarnedRef.current = true;
-        addHistory({ input: '', output: `⚠ 自动压缩失败(${reason}),本轮继续。` });
+        landLive({ input: '', suffix: `\n⚠ 自动压缩失败(${reason}),本轮继续。` });
+      } else {
+        landLive({ input: '' });
       }
     }
   };
@@ -475,12 +511,15 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
       const controller = new AbortController();
       abortRef.current = controller;
       await autoCompactIfNeeded();
-      addHistory({ input: display ?? text, output: '' });
+      // No host entry: the input echo lives in the live region and the whole
+      // turn lands in <Static> as one immutable entry when it ends.
+      beginTurnLive(display ?? text);
       if (options?.planMode) {
-        appendChatOutput('［plan 模式：只读探索，产出方案，PLAN READY 后可让我执行］\n');
+        streamAppend('［plan 模式：只读探索，产出方案，PLAN READY 后可让我执行］\n');
       }
 
       let endedNaturally = false;
+      let turnHiddenLines: string[] | undefined;
       try {
         const provider =
           process.env.TRANSCODE_MOCK === '1'
@@ -568,7 +607,7 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         if (shouldCollapse(stats)) {
           const line = summaryLine(stats);
           if (line) streamAppend(`\n${renderCollapsed(line, bufferedLines)}`);
-          attachHiddenLines(bufferedLines);
+          turnHiddenLines = bufferedLines;
         } else {
           for (const line of bufferedLines) streamAppend(line);
         }
@@ -633,8 +672,12 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
           streamAppend(`\n(run "models" to switch model + set key, or export its env var)`);
         }
       } finally {
-        // Drain any coalesced tail before busy resets and the queue continues.
-        streamAppendRef.current?.flush();
+        // Land the whole turn as one immutable static entry and clear the
+        // live region in a single commit, then let the queue continue.
+        landLive({
+          input: turnDisplayRef.current,
+          hiddenLines: turnHiddenLines,
+        });
         setBusyBoth(false);
         abortRef.current = undefined;
         setLiveTool(null);
@@ -649,7 +692,7 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         }
       }
     },
-    [ctx.modelId, addHistory, appendChatOutput, askInTerminal, setBusyBoth, dragFlush, applyQueue],
+    [ctx.modelId, addHistory, askInTerminal, setBusyBoth, dragFlush, applyQueue, beginTurnLive, landLive],
   );
 
   const enterModelSelect = useCallback(() => {
@@ -987,9 +1030,6 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
           messages: messagesRef.current,
           summary: summaryRef.current,
         });
-        // Host entry first so the streamed digest renders inside this
-        // command's own frame (same contract as the resume path).
-        addHistory({ input: trimmed, output: '' });
         const outcome = process.env.TRANSCODE_MOCK === '1'
           ? { compressed: false as const, record, error: 'mock 模式无模型' }
           : await runCompaction(record, keepN);
@@ -1000,15 +1040,21 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
           // Manual success heals the auto-compact breaker too.
           autoCompactFailuresRef.current = 0;
           autoCompactWarnedRef.current = false;
-          appendChatOutput(`已压缩:旧 ${turns.length - keepN} 轮提炼为前情提要,保留最近 ${keepN} 轮。`);
+          landLive({
+            input: trimmed,
+            suffix: `已压缩:旧 ${turns.length - keepN} 轮提炼为前情提要,保留最近 ${keepN} 轮。`,
+          });
           for (const entry of transcriptEntries(summaryRef.current, messagesRef.current)) {
             addHistory(entry);
           }
         } else {
-          appendChatOutput(`⚠ 压缩失败(${outcome.error ?? '未知'}),会话保持原样。`);
+          landLive({
+            input: trimmed,
+            suffix: `\n⚠ 压缩失败(${outcome.error ?? '未知'}),会话保持原样。`,
+          });
         }
       } catch {
-        appendChatOutput('⚠ 压缩失败,会话保持原样。');
+        landLive({ input: trimmed, suffix: '\n⚠ 压缩失败,会话保持原样。' });
       } finally {
         setBusyBoth(false);
       }
@@ -1051,7 +1097,7 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
 
       if (cmdName === 'clear') {
         ctx.clearHistory();
-        setHistory([]);
+        setChat(prev => ({ ...prev, history: [] }));
       } else if (result.output) {
         addHistory({ input: trimmed, output: result.output });
       }
@@ -1080,9 +1126,25 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
       // eslint-disable-next-line no-console
       console.error(`CB ${JSON.stringify(ch)} ret=${key.return} esc=${key.escape}`);
     }
-    // ctrl+o: toggle verbose tool logs (expand/collapse every turn).
+    // ctrl+o: expand the most recent folded turn (repeat presses walk
+    // backwards). Printed static entries never re-render, so expansion
+    // lands as a NEW entry and the source entry drops its hiddenLines
+    // (same-length mutation — Static-safe).
     if (key.ctrl && (ch === 'o' || ch === 'O')) {
-      setVerboseTools(v => !v);
+      const history = chat.history;
+      for (let i = history.length - 1; i >= 0; i--) {
+        const entry = history[i];
+        if (entry?.hiddenLines?.length) {
+          const expansion = renderExpansion({ output: entry.output, hiddenLines: entry.hiddenLines });
+          const index = i;
+          setChat(prev => {
+            const next = [...prev.history];
+            next[index] = { ...next[index]!, hiddenLines: undefined };
+            return { ...prev, history: [...next, { input: '', output: expansion }] };
+          });
+          break;
+        }
+      }
       return;
     }
     // @-mention popup: Esc dismisses it instead of exiting the app.
@@ -1359,7 +1421,7 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
     }
 
     if (phase === 'idle' && key.upArrow) {
-      const inputs = history.map(h => h.input);
+      const inputs = chat.history.map(h => h.input);
       if (inputs.length === 0) return;
 
       if (historyIndex === -1) {
@@ -1378,7 +1440,7 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
     if (phase === 'idle' && key.downArrow) {
       if (historyIndex === -1) return;
 
-      const inputs = history.map(h => h.input);
+      const inputs = chat.history.map(h => h.input);
       const newIndex = historyIndex + 1;
 
       if (newIndex >= inputs.length) {
@@ -1395,6 +1457,10 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
       commitInput(inputRef.current + ch);
     }
   });
+
+  // Live-region tail window: keep the interactive frame shorter than the
+  // terminal or Ink falls back to clearing + repainting everything.
+  const liveTail = sliceLiveTail(chat.liveOutput, (stdout?.rows ?? 24) - 10);
 
   const promptLabel = phase === 'model_select'
     ? 'vendor> '
@@ -1416,25 +1482,48 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
 
   return (
     <Box flexDirection="column" paddingX={1}>
-      {history.map((entry, i) => (
-        <Box key={i} flexDirection="column">
-          {entry.input && (
-            <Box flexDirection="column">
-              <Text color="gray" dimColor>{historyRule(stdout?.columns ?? 80)}</Text>
-              <Box>
-                <Text color="green" bold>&gt; </Text>
-                <Text color="cyan" bold>{entry.input}</Text>
+      <Static items={chat.history}>
+        {(entry, i) => (
+          <Box key={i} flexDirection="column">
+            {entry.input && (
+              <Box flexDirection="column">
+                <Text color="gray" dimColor>{historyRule(stdout?.columns ?? 80)}</Text>
+                <Box>
+                  <Text color="green" bold>&gt; </Text>
+                  <Text color="cyan" bold>{entry.input}</Text>
+                </Box>
+                <Text color="gray" dimColor>{historyRule(stdout?.columns ?? 80)}</Text>
               </Box>
-              <Text color="gray" dimColor>{historyRule(stdout?.columns ?? 80)}</Text>
-            </Box>
-          )}
-          {entry.output && (
-            <Box marginLeft={2}>
-              <Text>{entry.output}</Text>
-            </Box>
-          )}
+            )}
+            {entry.output && (
+              <Box marginLeft={2}>
+                <Text>{entry.output}</Text>
+              </Box>
+            )}
+          </Box>
+        )}
+      </Static>
+
+      {busy && chat.turnInput && (
+        <Box flexDirection="column">
+          <Text color="gray" dimColor>{historyRule(stdout?.columns ?? 80)}</Text>
+          <Box>
+            <Text color="green" bold>&gt; </Text>
+            <Text color="cyan" bold>{chat.turnInput}</Text>
+          </Box>
+          <Text color="gray" dimColor>{historyRule(stdout?.columns ?? 80)}</Text>
         </Box>
-      ))}
+      )}
+      {liveTail.hidden > 0 && (
+        <Box marginLeft={2}>
+          <Text color="gray" dimColor>… +{liveTail.hidden} lines</Text>
+        </Box>
+      )}
+      {liveTail.visible && (
+        <Box marginLeft={2}>
+          <Text>{liveTail.visible}</Text>
+        </Box>
+      )}
 
       {phase === 'permission' && pendingPermissionRef.current && (
         <Box marginLeft={2}>
