@@ -221,6 +221,19 @@ const commands: Command[] = [
   },
 ];
 
+/** Dispatch wrapper: a throwing command becomes an error message, never an unhandled rejection. */
+export async function executeCommand(
+  command: Command,
+  args: string[],
+  ctx: CommandContext,
+): Promise<CommandResult> {
+  try {
+    return await command.execute(args, ctx);
+  } catch (error) {
+    return { output: `Command failed: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
 export function getCommands(): Command[] {
   return commands;
 }

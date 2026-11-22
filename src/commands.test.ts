@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { findCommand, getCommands } from './commands.js';
+import { executeCommand, findCommand, getCommands, type Command } from './commands.js';
 import { getPermissionMode, resetPermissionMode, setPermissionMode } from './agent/permission.js';
 
 afterEach(() => {
@@ -131,5 +131,20 @@ describe('memory commands', () => {
       const miss = await forget.execute(['no-such'], ctx);
       expect(miss.output).toContain('No memory named');
     });
+  });
+});
+
+describe('executeCommand error containment', () => {
+  test('命令 execute 抛异常 → 返回错误文案而非向上抛', async () => {
+    const boom: Command = {
+      name: 'boom',
+      description: 'throws',
+      execute: () => {
+        throw new Error('EACCES: permission denied');
+      },
+    };
+    const result = await executeCommand(boom, [], { modelId: 'deepseek', setModelId: () => {}, clearHistory: () => {} });
+    expect(result.output).toContain('Command failed');
+    expect(result.output).toContain('EACCES');
   });
 });

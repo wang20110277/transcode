@@ -1,7 +1,7 @@
 import { Box, Text, useInput, useApp, useStdout } from 'ink';
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import path from 'node:path';
-import { findCommand, getCommands, type CommandContext } from '../commands.js';
+import { executeCommand, findCommand, getCommands, type CommandContext } from '../commands.js';
 import {
   getAvailableModels,
   createModel,
@@ -911,7 +911,7 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
     const cmd = findCommand(cmdName);
 
     if (cmd) {
-      const result = await cmd.execute(args, ctx);
+      const result = await executeCommand(cmd, args, ctx);
 
       if (result.exit) {
         exit();

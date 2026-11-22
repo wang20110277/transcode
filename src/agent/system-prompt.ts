@@ -132,7 +132,7 @@ export function buildSystemPrompt(
   ];
 
   const memory = context.userMemory;
-  if (memory && (memory.globalInstructions || memory.entries.length > 0)) {
+  if (memory && (memory.globalInstructions || memory.entries.length > 0 || memory.omitted.length > 0)) {
     sections.push('', '## User memory');
     if (memory.globalInstructions) {
       sections.push('', '### Global instructions', memory.globalInstructions);
@@ -142,9 +142,9 @@ export function buildSystemPrompt(
       for (const entry of memory.entries) {
         sections.push('', `#### ${entry.name}`, entry.content);
       }
-      if (memory.omitted.length > 0) {
-        sections.push('', `(omitted: ${memory.omitted.join(', ')})`);
-      }
+    }
+    if (memory.omitted.length > 0) {
+      sections.push('', `(omitted: ${memory.omitted.join(', ')})`);
     }
   }
 

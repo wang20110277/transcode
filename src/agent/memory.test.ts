@@ -154,3 +154,16 @@ describe('memory store', () => {
     });
   });
 });
+
+describe('scanEntries robustness', () => {
+  test('memory 目录里混入目录/不可读项 → 跳过不崩', async () => {
+    await withRoot(async () => {
+      const { mkdirSync } = await import('node:fs');
+      mkdirSync(path.join(memoryDir(), 'trap.md'), { recursive: true });
+      await saveMemory({ name: 'fine-one', type: 'user', content: 'ok', description: 'ok' });
+
+      const loaded = await loadUserMemory();
+      expect(loaded.entries.map((e) => e.name)).toEqual(['fine-one']);
+    });
+  });
+});

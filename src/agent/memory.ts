@@ -108,8 +108,12 @@ function scanEntries(): MemoryEntry[] {
   }
   const entries: MemoryEntry[] = [];
   for (const file of files.filter((n) => n.endsWith('.md') && n !== 'MEMORY.md').sort()) {
-    const parsed = parseMemoryFile(fs.readFileSync(path.join(memoryDir(), file), 'utf8'));
-    if (parsed) entries.push(parsed);
+    try {
+      const parsed = parseMemoryFile(fs.readFileSync(path.join(memoryDir(), file), 'utf8'));
+      if (parsed) entries.push(parsed);
+    } catch {
+      // Unreadable item (permissions, a directory, …): skip, like malformed files.
+    }
   }
   return entries;
 }

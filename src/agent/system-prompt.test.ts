@@ -161,3 +161,15 @@ describe('user memory injection', () => {
     }
   });
 });
+
+describe('omitted-only user memory', () => {
+  test('全部条目超预算被丢 → 段仍渲染且含 omitted 注名', () => {
+    const prompt = buildSystemPrompt({
+      cwd: '/tmp',
+      projectFiles: [],
+      userMemory: { globalInstructions: null, entries: [], omitted: ['huge'] },
+    });
+    expect(prompt).toContain('## User memory');
+    expect(prompt).toContain('(omitted: huge)');
+  });
+});
