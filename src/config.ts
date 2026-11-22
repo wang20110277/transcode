@@ -71,6 +71,10 @@ export function normalizeAutoUpdate(raw: unknown): NormalizedAutoUpdate {
 
 /** Raw (on-disk) shape of the autoCompact config block. */
 export interface AutoCompactConfig {
+  /** Token budget override per model spec (e.g. "glmc:glm-5.3"). 0 = off for that model. */
+  byModel?: Record<string, number>;
+  /** Global token budget. 0 = off. Legacy thresholdChars folds to /4 at read time. */
+  contextTokens?: number;
   enabled?: boolean;
   /** Compact when the estimated context reaches this many chars. */
   thresholdChars?: number;
@@ -82,12 +86,15 @@ export interface AutoCompactConfig {
 export interface NormalizedAutoCompact {
   enabled: boolean;
   thresholdChars: number;
+  /** Token budget (contextTokens, folding legacy thresholdChars /4). */
+  contextTokens: number;
   keepTurns: number;
 }
 
 const DEFAULT_AUTO_COMPACT: NormalizedAutoCompact = {
   enabled: true,
   thresholdChars: 200_000,
+  contextTokens: 50_000,
   keepTurns: 1,
 };
 
@@ -110,9 +117,14 @@ export function normalizeAutoCompact(raw: unknown): NormalizedAutoCompact {
     typeof obj.keepTurns === 'number' && obj.keepTurns >= 1
       ? Math.floor(obj.keepTurns)
       : DEFAULT_AUTO_COMPACT.keepTurns;
+  const contextTokens =
+    typeof obj.contextTokens === 'number' && obj.contextTokens >= 0
+      ? Math.floor(obj.contextTokens)
+      : Math.floor(threshold / 4);
   return {
     enabled: typeof obj.enabled === 'boolean' ? obj.enabled : true,
     thresholdChars: threshold,
+    contextTokens,
     keepTurns,
   };
 }
@@ -133,4 +145,15 @@ export function loadConfig(): TranscodeConfig {
 
 export function saveConfig(config: TranscodeConfig): void {
   writeFileSync(configPath(), JSON.stringify(config, null, 2) + '\n');
+}
+
+/** Set (tokens) or remove (null) the per-model context budget entry. */
+export function writeContextTokens(modelId: string, tokens: number | null): void {
+  const config = loadConfig();
+  const auto = { ...(config.autoCompact ?? {}) } as NonNullable<TranscodeConfig['autoCompact']>;
+  const byModel = { ...(auto.byModel ?? {}) };
+  if (tokens === null) delete byModel[modelId];
+  else byModel[modelId] = tokens;
+  auto.byModel = byModel;
+  saveConfig({ ...config, autoCompact: auto });
 }

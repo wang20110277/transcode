@@ -1,5 +1,6 @@
 import { AIMessage, type BaseMessage, type MessageContent } from '@langchain/core/messages';
 import type { SessionRecord } from './store.js';
+import { loadConfig } from '../config.js';
 
 /** Default verbatim window kept on compaction; older turns get distilled. */
 export const DEFAULT_KEEP_TURNS = 1;
@@ -19,26 +20,83 @@ export interface CompactModel {
   ): AsyncIterable<{ content: unknown }> | Promise<AsyncIterable<{ content: unknown }>>;
 }
 
-/** Rough token estimate for auto-compact: total content chars / 4.
- * Tool-call args are included — in a coding session they are often the
- * largest text (write_file/edit payloads). */
+const CJK_CHAR = /[\u2E80-\u9FFF\uF900-\uFAFF\uFE30-\uFE4F\uFF00-\uFF60\u3000-\u303F]/;
+
+/**
+ * CJK-calibrated token estimate: ~1.5 chars/token for CJK text, ~4
+ * chars/token otherwise (the old chars/4 flat rate underestimated Chinese
+ * by 2-3x and compacted far too early on 1M-window models). Tool-call args
+ * are included — in a coding session they are often the largest text.
+ */
 export function estimateTokens(messages: BaseMessage[]): number {
-  let chars = 0;
+  let cjk = 0;
+  let other = 0;
+  const count = (text: string): void => {
+    for (const ch of text) {
+      if (CJK_CHAR.test(ch)) cjk++;
+      else other++;
+    }
+  };
   for (const message of messages) {
-    chars += contentText(message.content).length;
+    count(contentText(message.content));
     const calls = (message as AIMessage).tool_calls;
-    if (calls?.length) chars += JSON.stringify(calls).length;
+    if (calls?.length) count(JSON.stringify(calls));
   }
-  return Math.floor(chars / 4);
+  return Math.floor(cjk / 1.5 + other / 4);
 }
 
-/** Auto-compact decision. thresholdChars is in CHARS; estimateTokens is in
- * tokens (chars/4) — convert back so units match. */
+/** Auto-compact decision, token-to-token against the resolved budget. */
 export function shouldAutoCompact(
   messages: BaseMessage[],
-  cfg: { thresholdChars: number },
+  cfg: { contextTokens: number },
 ): boolean {
-  return estimateTokens(messages) * 4 >= cfg.thresholdChars;
+  return estimateTokens(messages) >= cfg.contextTokens;
+}
+
+export type ContextBudgetSource = 'byModel' | 'env' | 'global' | 'default';
+
+export interface ContextBudget {
+  tokens: number;
+  source: ContextBudgetSource;
+  enabled: boolean;
+}
+
+const DEFAULT_CONTEXT_TOKENS = 100_000;
+
+/**
+ * Layered budget resolution (spec ruling #3): byModel[spec] beats the env
+ * override (the interactive per-model pick is the strongest intent), env
+ * beats the global config layer, legacy fields fold at read time and are
+ * never written back. `enabled: false` gates every consumer; a 0 at any
+ * layer is the per-layer off hatch.
+ */
+export function resolveContextTokens(
+  modelId: string,
+  env: Record<string, string | undefined> = process.env,
+  config: { autoCompact?: Record<string, unknown> } = loadConfig() as { autoCompact?: Record<string, unknown> },
+): ContextBudget {
+  const auto = config.autoCompact ?? {};
+  const enabled = auto.enabled !== false;
+
+  const byModel = (auto.byModel as Record<string, number> | undefined)?.[modelId];
+  if (typeof byModel === 'number') return { tokens: byModel, source: 'byModel', enabled };
+
+  const envTokens = Number(env.TRANSCODE_COMPACT_TOKENS ?? '');
+  if (env.TRANSCODE_COMPACT_TOKENS !== undefined && Number.isFinite(envTokens) && envTokens >= 0) {
+    return { tokens: Math.floor(envTokens), source: 'env', enabled };
+  }
+  const envChars = Number(env.TRANSCODE_COMPACT_CHARS ?? '');
+  if (env.TRANSCODE_COMPACT_CHARS !== undefined && Number.isFinite(envChars) && envChars >= 0) {
+    return { tokens: Math.floor(envChars / 4), source: 'env', enabled };
+  }
+
+  const contextTokens = auto.contextTokens;
+  if (typeof contextTokens === 'number') return { tokens: contextTokens, source: 'global', enabled };
+  const legacy = auto.thresholdChars;
+  if (typeof legacy === 'number' && legacy > 0) {
+    return { tokens: Math.floor(legacy / 4), source: 'global', enabled };
+  }
+  return { tokens: DEFAULT_CONTEXT_TOKENS, source: 'default', enabled };
 }
 
 /**

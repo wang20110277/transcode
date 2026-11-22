@@ -180,10 +180,9 @@ describe('estimateTokens', () => {
 });
 
 describe('shouldAutoCompact', () => {
-  test('compares in CHARS: at threshold triggers, just below does not', () => {
-    const cfg = { thresholdChars: 200 };
-    expect(shouldAutoCompact([new HumanMessage('a'.repeat(200))], cfg)).toBe(true);
-    expect(shouldAutoCompact([new HumanMessage('a'.repeat(196))], cfg)).toBe(false);
+  test('token 口径:达到预算触发,差一点不触发(旧 chars 用例迁移)', () => {
+    expect(shouldAutoCompact([new HumanMessage('a'.repeat(200))], { contextTokens: 50 })).toBe(true);
+    expect(shouldAutoCompact([new HumanMessage('a'.repeat(196))], { contextTokens: 50 })).toBe(false);
   });
 });
 
@@ -221,5 +220,60 @@ describe('transcriptEntries', () => {
       { input: '问题1:正文', output: '' },
       { input: '', output: '回答1:正文' },
     ]);
+  });
+});
+
+describe('cjk-aware estimateTokens', () => {
+  test('中文字符 1.5 字/token,ASCII 4 字/token,混合线性可加', async () => {
+    const { estimateTokens } = await import('./compact.js');
+    const { HumanMessage } = await import('@langchain/core/messages');
+    const cjk = new HumanMessage('中'.repeat(1500));   // ≈ 1000 tokens
+    const ascii = new HumanMessage('a'.repeat(4000));  // = 1000 tokens
+    const mixed = new HumanMessage('中'.repeat(750) + 'a'.repeat(2000)); // 500 + 500
+    expect(estimateTokens([cjk])).toBe(1000);
+    expect(estimateTokens([ascii])).toBe(1000);
+    expect(estimateTokens([mixed])).toBe(1000);
+  });
+
+  test('shouldAutoCompact 用 token 预算直接比较(>=)', async () => {
+    const { shouldAutoCompact } = await import('./compact.js');
+    const { HumanMessage } = await import('@langchain/core/messages');
+    const msgs = [new HumanMessage('a'.repeat(4000))]; // 1000 tokens
+    expect(shouldAutoCompact(msgs, { contextTokens: 1000 })).toBe(true);
+    expect(shouldAutoCompact(msgs, { contextTokens: 1001 })).toBe(false);
+  });
+});
+
+describe('resolveContextTokens', () => {
+  test('优先级链:byModel > env(TOKENS) > env(CHARS/4) > contextTokens > thresholdChars/4 > 100k', async () => {
+    const { resolveContextTokens } = await import('./compact.js');
+    const base = { enabled: true, contextTokens: 50_000 };
+    // byModel 压 env
+    expect(resolveContextTokens('glmc:glm-5.3', { TRANSCODE_COMPACT_TOKENS: '9' }, { autoCompact: { ...base, byModel: { 'glmc:glm-5.3': 1_000_000 } } } as never))
+      .toMatchObject({ tokens: 1_000_000, source: 'byModel' });
+    // env 压 global
+    expect(resolveContextTokens('x', { TRANSCODE_COMPACT_TOKENS: '9' }, { autoCompact: base } as never))
+      .toMatchObject({ tokens: 9, source: 'env' });
+    // 新 env 优先于旧 env
+    expect(resolveContextTokens('x', { TRANSCODE_COMPACT_TOKENS: '9', TRANSCODE_COMPACT_CHARS: '400' }, { autoCompact: { enabled: true } } as never))
+      .toMatchObject({ tokens: 9, source: 'env' });
+    expect(resolveContextTokens('x', { TRANSCODE_COMPACT_CHARS: '400' }, { autoCompact: { enabled: true } } as never))
+      .toMatchObject({ tokens: 100, source: 'env' });
+    // global 与旧字段别名
+    expect(resolveContextTokens('x', {}, { autoCompact: base } as never))
+      .toMatchObject({ tokens: 50_000, source: 'global' });
+    expect(resolveContextTokens('x', {}, { autoCompact: { enabled: true, thresholdChars: 200_000 } } as never))
+      .toMatchObject({ tokens: 50_000, source: 'global' });
+    // 默认
+    expect(resolveContextTokens('x', {}, { autoCompact: { enabled: true } } as never))
+      .toMatchObject({ tokens: 100_000, source: 'default' });
+  });
+
+  test('enabled 总闸与 0 暗门', async () => {
+    const { resolveContextTokens } = await import('./compact.js');
+    expect(resolveContextTokens('x', {}, { autoCompact: { enabled: false, byModel: { x: 5 } } } as never))
+      .toMatchObject({ enabled: false });
+    expect(resolveContextTokens('x', {}, { autoCompact: { enabled: true, byModel: { x: 0 } } } as never))
+      .toMatchObject({ tokens: 0, source: 'byModel' });
   });
 });
