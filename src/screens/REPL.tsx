@@ -49,6 +49,7 @@ import {
 import { resolveSubmitInput } from './submit.js';
 import { submitSearchApiKey } from './search-setup.js';
 import { reduceQueue, shouldResumeQueue, type QueueAction } from './input-queue.js';
+import { createStreamThrottler } from './stream-throttle.js';
 import { historyRule } from './history-rule.js';
 import { renderDiff } from './diff-render.js';
 import { createTurnStats, recordCall, renderTurnLog, shouldCollapse, summaryLine } from './turn-summary.js';
@@ -349,6 +350,21 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
   }, []);
 
   /**
+   * Frame-level coalescing for streaming output. Stock Ink re-renders
+   * synchronously per setState, so per-delta appends rewrite the whole
+   * history frame dozens of times per second — that is the flicker.
+   * Everything within a turn flows through here and is flushed at turn
+   * end (order preserved; ≤32ms latency, invisible).
+   */
+  const streamAppendRef = useRef<ReturnType<typeof createStreamThrottler> | null>(null);
+  if (streamAppendRef.current === null) {
+    streamAppendRef.current = createStreamThrottler(appendChatOutput, 32);
+  }
+  const streamAppend = (chunk: string): void => {
+    streamAppendRef.current?.push(chunk);
+  };
+
+  /**
    * One shared compaction run for /resume and /compact: fast-model routing
    * (routing.compact → fallback current model) with the digest streamed
    * live into the chat area.
@@ -363,11 +379,13 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         record,
         createModel(getRouting().compact ?? ctx.modelId).model,
         keepTurns,
-        (delta) => appendChatOutput(delta),
+        (delta) => streamAppend(delta),
       );
+      streamAppendRef.current?.flush();
       appendChatOutput('\n\n');
       return outcome;
     } catch (error) {
+      streamAppendRef.current?.flush();
       appendChatOutput('\n\n');
       return {
         compressed: false,
@@ -510,11 +528,11 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
           toolSession: toolSessionRef.current,
           onEvent: event => {
             if (event.type === 'text') {
-              appendChatOutput(lastWasTool ? `\n${event.text}` : event.text);
+              streamAppend(lastWasTool ? `\n${event.text}` : event.text);
               turnAssistantText += event.text;
               lastWasTool = false;
             } else if (event.type === 'max_turns_reached') {
-              appendChatOutput(
+              streamAppend(
                 `\n⚠ 已达轮次上限（${event.maxTurns}），任务未完成。输入"继续"接着做，或调大 TRANSCODE_MAX_TURNS。`,
               );
               lastWasTool = true;
@@ -532,10 +550,10 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
               );
               if (event.diff) {
                 // Edits and writes stay visible immediately — rare and important.
-                appendChatOutput(`\n⚙ ${title} ${marker}\n${renderDiff(event.diff)}`);
+                streamAppend(`\n⚙ ${title} ${marker}\n${renderDiff(event.diff)}`);
               } else if (event.name === 'todo_write' || event.name === 'dispatch_agent') {
                 // Progress state and sub-agent reports: show immediately.
-                appendChatOutput(`\n${event.output}`);
+                streamAppend(`\n${event.output}`);
               } else {
                 bufferedLines.push(`\n⚙ ${title} ${marker}`);
               }
@@ -549,10 +567,10 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         // Collapsed detail is kept (hiddenLines) so ctrl+o can reveal it.
         if (shouldCollapse(stats)) {
           const line = summaryLine(stats);
-          if (line) appendChatOutput(`\n${line}`);
+          if (line) streamAppend(`\n${line}`);
           attachHiddenLines(bufferedLines);
         } else {
-          for (const line of bufferedLines) appendChatOutput(line);
+          for (const line of bufferedLines) streamAppend(line);
         }
 
         messagesRef.current = result.messages.filter(
@@ -604,17 +622,19 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
           })();
         }
         if (controller.signal.aborted) {
-          appendChatOutput('\n(cancelled)');
+          streamAppend('\n(cancelled)');
         } else {
           endedNaturally = true;
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        appendChatOutput(`\n⚠ ${message}`);
+        streamAppend(`\n⚠ ${message}`);
         if (/api.?key/i.test(message)) {
-          appendChatOutput(`\n(run "models" to switch model + set key, or export its env var)`);
+          streamAppend(`\n(run "models" to switch model + set key, or export its env var)`);
         }
       } finally {
+        // Drain any coalesced tail before busy resets and the queue continues.
+        streamAppendRef.current?.flush();
         setBusyBoth(false);
         abortRef.current = undefined;
         setLiveTool(null);
