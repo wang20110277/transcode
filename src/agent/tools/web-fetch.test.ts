@@ -173,3 +173,14 @@ describe('web_fetch tool', () => {
     );
   });
 });
+
+describe('htmlToText pathological input', () => {
+  test('孤立 < 无 > 的病态输入线性完成(标签剥离不允许二次方冻结)', () => {
+    const n = 400_000;
+    const start = Date.now();
+    const { text } = htmlToText('<'.repeat(n));
+    expect(Date.now() - start).toBeLessThan(2_000);
+    // 无 > 不构成标签,字符原样保留
+    expect(text).toBe('<'.repeat(n));
+  });
+});

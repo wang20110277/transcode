@@ -33,14 +33,41 @@ export function decodeBody(body: Uint8Array, charset: string): string {
   }
 }
 
+/**
+ * Linear tag stripping: regex `/<[^>]+>/g` is quadratic on pathological
+ * input (hundreds of thousands of lone '<'), freezing the process for tens
+ * of seconds; this single-pass scan stays O(n).
+ */
+function stripTags(html: string): string {
+  let out = '';
+  let cursor = 0;
+  for (;;) {
+    const open = html.indexOf('<', cursor);
+    if (open === -1) {
+      out += html.slice(cursor);
+      return out;
+    }
+    out += html.slice(cursor, open);
+    const close = html.indexOf('>', open + 1);
+    if (close === -1) {
+      // No closing '>': the rest is literal text, not a tag.
+      out += html.slice(open);
+      return out;
+    }
+    out += ' ';
+    cursor = close + 1;
+  }
+}
+
 /** Strip head/script/style/noscript noise, tags to whitespace, collapse blank lines. */
 export function htmlToText(html: string): { title: string | null; text: string } {
   const titleMatch = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html);
   const title = titleMatch ? titleMatch[1].trim().replace(/\s+/g, ' ') || null : null;
-  const text = html
-    .replace(/<head[\s\S]*?<\/head>/gi, ' ')
-    .replace(/<(script|style|noscript)\b[\s\S]*?<\/\1>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
+  const text = stripTags(
+    html
+      .replace(/<head[\s\S]*?<\/head>/gi, ' ')
+      .replace(/<(script|style|noscript)\b[\s\S]*?<\/\1>/gi, ' '),
+  )
     .replace(/&nbsp;/gi, ' ')
     .replace(/&amp;/gi, '&')
     .replace(/&lt;/gi, '<')

@@ -47,6 +47,7 @@ import {
   slashQuery,
 } from './slash-completion.js';
 import { resolveSubmitInput } from './submit.js';
+import { submitSearchApiKey } from './search-setup.js';
 import { historyRule } from './history-rule.js';
 import { renderDiff } from './diff-render.js';
 import { createTurnStats, recordCall, shouldCollapse, summaryLine } from './turn-summary.js';
@@ -116,6 +117,9 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
   // /search setup flow: cursor over SEARCH_PROVIDERS, ref carries the pick.
   const [searchCursor, setSearchCursor] = useState(0);
   const searchProviderRef = useRef<WebSearchConfig['provider']>('tavily');
+  // Generation guard: bumping invalidates an in-flight connectivity check,
+  // so a cancelled /search never writes config or yanks the phase back.
+  const searchRunIdRef = useRef(0);
   // session_select picker: cursor over the project-scoped session snapshot.
   const [sessionCursor, setSessionCursor] = useState(0);
   // Model selection flow: vendor → model → key (reused if saved) → check.
@@ -651,33 +655,20 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
     [applyModelSwitch, addHistory, commitInput, dragFlush],
   );
 
-  // /search key step: validate with a real query, persist only on success.
+  // /search key step: orchestration lives in search-setup.ts (tested there).
   const handleSearchApiKey = useCallback(
     async (value: string) => {
+      const runId = ++searchRunIdRef.current;
       const provider = searchProviderRef.current;
-      const saved = normalizeWebSearchConfig(loadConfig().webSearch);
-      const apiKey = value.trim() || (saved?.provider === provider ? saved.apiKey : '');
-      if (!apiKey) {
-        addHistory({ input: '••••••••', output: 'API key 不能为空。(Esc 取消)' });
-        return;
-      }
       setPhase('search_check');
-      addHistory({ input: '••••••••', output: `正在测试 ${provider} key…` });
-      const result = await checkWebSearch({ provider, apiKey });
-      if (result.ok) {
-        saveWebSearchConfig(provider, apiKey);
-        addHistory({
-          input: '',
-          output: `✓ ${provider} 连通正常(首条结果:${result.firstTitle})。web_search 已启用。`,
-        });
-        setPhase('idle');
-      } else {
-        addHistory({
-          input: '',
-          output: `✗ 测试失败:${result.error}\n请重新输入 key(Esc 取消)`,
-        });
-        setPhase('search_apikey');
-      }
+      await submitSearchApiKey(value, provider, {
+        savedConfig: () => normalizeWebSearchConfig(loadConfig().webSearch),
+        check: (cfg) => checkWebSearch(cfg),
+        save: saveWebSearchConfig,
+        notify: (output) => addHistory({ input: '••••••••', output }),
+        onOutcome: (phase) => setPhase(phase),
+        isStale: () => searchRunIdRef.current !== runId,
+      });
       dragFlush();
     },
     [addHistory, dragFlush],
@@ -1041,6 +1032,9 @@ export default function REPL({ ctx, updateNotice }: REPLProps) {
         return;
       }
       if (phase !== 'idle') {
+        // Invalidate any in-flight /search connectivity check: its late
+        // result must not write config or pull the user back into the flow.
+        searchRunIdRef.current++;
         setPhase('idle');
         setVendor(null);
         commitInput('');

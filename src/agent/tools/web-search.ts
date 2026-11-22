@@ -16,7 +16,7 @@ export const webSearchTool: AgentTool = {
     maxResults: z.number().int().min(1).max(20).optional().describe('Hits to return (default 5)'),
   }),
   title: (input) => `web_search ${input.query}`,
-  async execute(input) {
+  async execute(input, ctx) {
     const cfg = normalizeWebSearchConfig(loadConfig().webSearch);
     if (!cfg) {
       return (
@@ -29,6 +29,8 @@ export const webSearchTool: AgentTool = {
         cfg,
         String(input.query),
         input.maxResults ? Number(input.maxResults) : undefined,
+        globalThis.fetch,
+        ctx?.signal,
       );
       if (hits.length === 0) return `No results for: ${input.query}`;
       return hits.map((hit) => `${hit.title} — ${hit.url}\n${hit.snippet}`).join('\n\n');

@@ -21,3 +21,11 @@ describe('resolveSubmitInput', () => {
     expect(resolveSubmitInput('idle', 'hello')).toBe('hello');
   });
 });
+
+describe('search_apikey empty submit', () => {
+  test('empty Enter at the search_apikey prompt submits (reuses the saved key)', () => {
+    // The /search prompt advertises "(Enter 沿用已存 key)" — a bare Enter
+    // must reach the search key handler, which falls back to the saved key.
+    expect(resolveSubmitInput('search_apikey', '')).toBe('');
+  });
+});

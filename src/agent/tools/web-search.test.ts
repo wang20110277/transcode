@@ -72,3 +72,29 @@ describe('web_search tool', () => {
 });
 
 void fs;
+
+describe('web_search cancellation wiring', () => {
+  test('execute 把 ctx.signal 接进搜索请求(Esc 打断子代理/主回合)', async () => {
+    await withConfig({ provider: 'tavily', apiKey: 'tvly-5' }, async () => {
+      let captured: AbortSignal | undefined;
+      const original = globalThis.fetch;
+      globalThis.fetch = (async (_i: any, init?: any) => {
+        captured = init?.signal;
+        return new Response(
+          JSON.stringify({ results: [{ title: 'T', url: 'u', content: 'c' }] }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }) as typeof fetch;
+      try {
+        const controller = new AbortController();
+        const session = createToolSession('/tmp');
+        await webSearchTool.execute({ query: 'q' }, { cwd: session.cwd, session, signal: controller.signal });
+        expect(captured).toBeInstanceOf(AbortSignal);
+        controller.abort();
+        expect(captured!.aborted).toBe(true);
+      } finally {
+        globalThis.fetch = original;
+      }
+    });
+  });
+});

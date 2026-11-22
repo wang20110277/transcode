@@ -3,7 +3,7 @@
  * prompt the hint reads "apikey (回车沿用 sk-…xxxx)> " — a bare Enter means
  * "reuse the saved key", and handleApiKey falls back to it for empty input.
  */
-const EMPTY_SUBMIT_PHASES = new Set(['model_apikey']);
+const EMPTY_SUBMIT_PHASES = new Set(['model_apikey', 'search_apikey']);
 
 /**
  * Decide whether a submitted line should be dispatched. Returns the trimmed

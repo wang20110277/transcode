@@ -166,3 +166,30 @@ describe('web search setup helpers', () => {
     }
   });
 });
+
+describe('web search request signals', () => {
+  test('两适配器 fetch 带 AbortSignal,外部 signal abort 可传导(Esc 可取消)', async () => {
+    const { runWebSearch } = await import('./web-search.js');
+    for (const provider of ['tavily', 'brave'] as const) {
+      let captured: AbortSignal | undefined;
+      const fetchImpl = (async (_input: any, init?: any) => {
+        captured = init?.signal;
+        return new Response(
+          JSON.stringify(
+            provider === 'tavily'
+              ? { results: [{ title: 'T', url: 'u', content: 'c' }] }
+              : { web: { results: [{ title: 'T', url: 'u', description: 'c' }] } },
+          ),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }) as typeof fetch;
+      const outer = new AbortController();
+      const pending = runWebSearch({ provider, apiKey: 'k' }, 'q', 5, fetchImpl, outer.signal);
+      expect(captured).toBeInstanceOf(AbortSignal);
+      expect(captured!.aborted).toBe(false);
+      outer.abort();
+      expect(captured!.aborted).toBe(true);
+      await pending;
+    }
+  });
+});

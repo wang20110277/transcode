@@ -50,16 +50,27 @@ async function safeText(res: Response): Promise<string> {
   }
 }
 
+/** Search requests get a 15s ceiling like web_fetch; an outer signal (Esc)
+ *  can cut them short sooner via AbortSignal.any. */
+const SEARCH_TIMEOUT_MS = 15_000;
+
+function searchSignal(outer?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(SEARCH_TIMEOUT_MS);
+  return outer ? AbortSignal.any([timeout, outer]) : timeout;
+}
+
 async function tavilySearch(
   apiKey: string,
   query: string,
   maxResults: number,
   fetchImpl: typeof fetch,
+  signal?: AbortSignal,
 ): Promise<SearchHit[]> {
   const res = await fetchImpl('https://api.tavily.com/search', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ api_key: apiKey, query, max_results: maxResults }),
+    signal: searchSignal(signal),
   });
   if (!res.ok) throw new Error(`tavily HTTP ${res.status}: ${await safeText(res)}`);
   const data = (await res.json()) as {
@@ -77,10 +88,12 @@ async function braveSearch(
   query: string,
   maxResults: number,
   fetchImpl: typeof fetch,
+  signal?: AbortSignal,
 ): Promise<SearchHit[]> {
   const qs = new URLSearchParams({ q: query, count: String(maxResults) }).toString();
   const res = await fetchImpl(`https://api.search.brave.com/res/v1/web/search?${qs}`, {
     headers: { accept: 'application/json', 'x-subscription-token': apiKey },
+    signal: searchSignal(signal),
   });
   if (!res.ok) throw new Error(`brave HTTP ${res.status}: ${await safeText(res)}`);
   const data = (await res.json()) as {
@@ -98,9 +111,14 @@ export async function runWebSearch(
   query: string,
   maxResults = 5,
   fetchImpl: typeof fetch = globalThis.fetch,
+  signal?: AbortSignal,
 ): Promise<SearchHit[]> {
-  if (cfg.provider === 'tavily') return tavilySearch(cfg.apiKey, query, maxResults, fetchImpl);
-  if (cfg.provider === 'brave') return braveSearch(cfg.apiKey, query, maxResults, fetchImpl);
+  if (cfg.provider === 'tavily') {
+    return tavilySearch(cfg.apiKey, query, maxResults, fetchImpl, signal);
+  }
+  if (cfg.provider === 'brave') {
+    return braveSearch(cfg.apiKey, query, maxResults, fetchImpl, signal);
+  }
   throw new Error(`unknown search provider: ${String(cfg.provider)}`);
 }
 
