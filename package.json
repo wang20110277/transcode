@@ -11,14 +11,18 @@
   "files": [
     "bin",
     "src",
+    "dist",
     "docs",
     "README.md"
   ],
   "bin": {
-    "transcode": "./bin/transcode.ts"
+    "transcode": "./dist/cli.js"
   },
   "scripts": {
+    "build:cli": "bun build bin/transcode.ts --target=node --packages=external --outfile=dist/cli.js",
     "build:repl": "bun build src/main.tsx --target=node --packages=external --outdir=dist",
+    "build": "bun run build:cli && bun run build:repl",
+    "prepublishOnly": "bun run build",
     "start": "bun run build:repl && node dist/main.js",
     "dev": "bun run build:repl && node dist/main.js",
     "acp": "bun bin/transcode.ts acp",
