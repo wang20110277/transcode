@@ -1,4 +1,20 @@
 import { spawn } from 'node:child_process';
+
+/**
+ * How to invoke npm on this platform. On unix npm is a real executable;
+ * on Windows it is npm.cmd, and Node (CVE-2024-27980 hardening) refuses
+ * to spawn .cmd/.bat without a shell — plain spawn('npm') dies with
+ * ENOENT, so every upgrade / auto-update check silently no-ops on
+ * Windows. Args are fixed constants (no spaces / cmd metacharacters),
+ * so shell:true is safe here.
+ */
+export function npmSpawnSpec(
+  platform: NodeJS.Platform = process.platform,
+): { command: 'npm' | 'npm.cmd'; shell: boolean } {
+  return platform === 'win32'
+    ? { command: 'npm.cmd', shell: true }
+    : { command: 'npm', shell: false };
+}
 import { realpathSync } from 'node:fs';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -77,7 +93,8 @@ export function isDevInstall(entryPath: string, npmRoot: string): boolean {
  */
 function shQuiet(cmd: string, args: string[]): Promise<{ code: number; stdout: string }> {
   return new Promise(resolve => {
-    const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const { command, shell } = npmSpawnSpec();
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], shell });
     let settled = false;
     const settle = (code: number, stdout: string) => {
       if (settled) return;
@@ -193,7 +210,8 @@ function writeLastCheck(): void {
 
 function sh(cmd: string, args: string[]): Promise<{ code: number; stdout: string }> {
   return new Promise(resolve => {
-    const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'inherit'] });
+    const { command, shell } = npmSpawnSpec();
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'inherit'], shell });
     let stdout = '';
     child.stdout.on('data', (d: Buffer) => {
       stdout += d.toString();
@@ -208,7 +226,8 @@ function sh(cmd: string, args: string[]): Promise<{ code: number; stdout: string
 
 function shInherit(cmd: string, args: string[]): Promise<number> {
   return new Promise(resolve => {
-    const child = spawn(cmd, args, { stdio: 'inherit' });
+    const { command, shell } = npmSpawnSpec();
+    const child = spawn(command, args, { stdio: 'inherit', shell });
     child.on('error', err => {
       process.stderr.write(`[transcode] failed to run ${cmd}: ${err.message}\n`);
       resolve(1);

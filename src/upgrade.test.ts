@@ -5,6 +5,7 @@ import path from 'node:path';
 import {
   autoUpdateNotice,
   isDevInstall,
+  npmSpawnSpec,
   planAutoUpdate,
   startAutoUpdate,
 } from './upgrade.js';
@@ -49,6 +50,19 @@ describe('isDevInstall', () => {
       rmSync(root, { recursive: true, force: true });
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+});
+
+describe('npmSpawnSpec', () => {
+  test('windows npm must go through npm.cmd with a shell', () => {
+    // npm is a batch file on Windows and Node refuses to spawn .cmd
+    // without a shell (CVE-2024-27980) — plain spawn('npm') is ENOENT.
+    expect(npmSpawnSpec('win32')).toEqual({ command: 'npm.cmd', shell: true });
+  });
+
+  test('unix npm spawns directly, no shell wrapper', () => {
+    expect(npmSpawnSpec('darwin')).toEqual({ command: 'npm', shell: false });
+    expect(npmSpawnSpec('linux')).toEqual({ command: 'npm', shell: false });
   });
 });
 
