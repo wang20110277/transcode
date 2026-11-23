@@ -9,7 +9,8 @@
 
 ## 环境要求
 
-- Bun >= 1.3
+- Node.js >= 20（全局安装用户；入口为编译后的 `dist/cli.js`，`#!/usr/bin/env node`）
+- Bun >= 1.3（仅本仓库开发/构建需要）
 - 至少一个模型提供商的 API Key
 
 **平台**：macOS / Linux 原生支持。Windows 需安装 [Git Bash](https://git-scm.com/)（bash 工具自动探测 `C:\Program Files\Git\bin\bash.exe` 等常见位置；也可用 `TRANSCODE_SHELL` 显式指定），超时终止走 `taskkill /T /F` 杀进程树，路径在 Windows/Git-Bash 两种形态间自动转换。纯 PowerShell 环境（无 Git Bash）暂不支持。
@@ -18,7 +19,7 @@
 bun install
 ```
 
-也可以全局安装（需要本机有 Bun，因为入口是 `#!/usr/bin/env bun`）：
+也可以全局安装（v0.12.1 起无需 Bun，npm 会用 Node 运行编译产物）：
 
 ```bash
 npm i -g @trans-ai/trans-code
