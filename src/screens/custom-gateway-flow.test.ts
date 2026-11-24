@@ -81,7 +81,12 @@ afterEach(async () => {
 
 /** Starts a NewAPI-like gateway and returns its root URL (no /v1). */
 function startGateway(
-  options: { chat?: { status: number; body: string; type: string }; models?: string[] } = {},
+  options: {
+    chat?: { status: number; body: string; type: string };
+    models?: string[];
+    /** Model name the completion reports (`served`); default the listed one. */
+    served?: string;
+  } = {},
 ): string {
   const models = options.models ?? ['qwen3.6-35b-fp8'];
   const server = Bun.serve({
@@ -98,7 +103,7 @@ function startGateway(
             headers: { 'content-type': options.chat.type },
           });
         }
-        return Response.json(COMPLETION);
+        return Response.json({ ...COMPLETION, model: options.served ?? COMPLETION.model });
       }
       // Unknown paths: NewAPI answers with 200 + the web page.
       return new Response(WEB_PAGE, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } });
@@ -306,5 +311,43 @@ describe('custom gateways in /models', () => {
     expect(end).toContain('model-ft');
     expect(end).not.toContain('❯ model-aa');
     expect(end).toContain('↑ 向上');
+  });
+
+  describe('switch line for a new custom gateway', () => {
+    /** Creates a gateway entry for a model id that cannot be an entry name as-is. */
+    async function createEntry(instance: Instance, root: string): Promise<void> {
+      await openCustomGateways(instance);
+      await press(instance, '\r'); // + 新建自定义模型…
+      await submit(instance, root);
+      await submit(instance, 'k');
+      await settle();
+      await press(instance, '\x1b[A'); // wraps to "自定义模型名…"
+      await press(instance, '\r');
+      await submit(instance, 'Qwen/Qwen3.8-27B'); // "/" is not allowed in an entry name
+      await settle();
+      await press(instance, '\r'); // default budget → the switch is applied
+    }
+
+    test('does not claim another model when the entry name is only a sanitised form of the model', async () => {
+      const root = startGateway({ served: 'Qwen/Qwen3.8-27B' });
+      const instance = mount();
+      await settle();
+
+      await createEntry(instance, root);
+
+      const landed = plain(instance.lastFrame() ?? '');
+      expect(landed).toContain('已切换到 Qwen-Qwen3.8-27B');
+      expect(landed).not.toContain('实际生效');
+    });
+
+    test('still names the model the gateway really serves when it differs', async () => {
+      const root = startGateway({ served: 'renamed-upstream' });
+      const instance = mount();
+      await settle();
+
+      await createEntry(instance, root);
+
+      expect(plain(instance.lastFrame() ?? '')).toContain('实际生效 renamed-upstream');
+    });
   });
 });

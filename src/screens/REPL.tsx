@@ -12,6 +12,7 @@ import {
   saveCustomProfile,
   listEndpointModels,
   resolveGatewayBaseUrl,
+  resolveModel,
   isCustomModelSpec,
   listCustomGateways,
   customProfileName,
@@ -807,7 +808,10 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       registerApiKey(target.split(':')[0]!, apiKey);
       ctx.setModelId(target);
       setPreferredModel(target);
-      const pickedModel = target.split(':').pop() ?? label;
+      // What was actually requested (a custom entry's name may be a
+      // sanitised form of its model id): the note is only for a gateway
+      // that really maps the name onto another model.
+      const pickedModel = resolveModel(target).model || target.split(':').pop() || label;
       addHistory({
         input: '••••••••',
         output: `${checkMessage} — ${switchNote(label, pickedModel, served)}`,
