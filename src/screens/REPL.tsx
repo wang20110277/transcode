@@ -58,6 +58,7 @@ import { reduceQueue, shouldResumeQueue, type QueueAction } from './input-queue.
 import { createStreamThrottler } from './stream-throttle.js';
 import { historyRule } from './history-rule.js';
 import { listWindow } from './list-window.js';
+import { quietLibraryNoise } from '../provider/library-noise.js';
 import { renderDiff } from './diff-render.js';
 import { createTurnStats, recordCall, renderCollapsed, renderExpansion, shouldCollapse, summaryLine } from './turn-summary.js';
 import { sliceLiveTail } from './live-view.js';
@@ -352,6 +353,10 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // The terminal is ours while the REPL is mounted. Ink has taken
+  // console.* over by the time this effect runs; wrap what is in place so
+  // LangChain's per-chunk merge warnings cannot flood the screen.
+  useEffect(() => quietLibraryNoise(), []);
   const pendingPermissionRef = useRef<{
     request: PermissionRequest;
     resolve: (allow: boolean) => void;

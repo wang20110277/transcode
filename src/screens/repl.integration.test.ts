@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeAll, mock } from 'bun:test';
+import { describe, expect, test, beforeAll, afterAll, mock } from 'bun:test';
 import React from 'react';
 import { render } from 'ink-testing-library';
 import { AIMessageChunk } from '@langchain/core/messages';
@@ -10,10 +10,13 @@ import { AIMessageChunk } from '@langchain/core/messages';
  */
 
 const textEvents: string[] = [];
+let real: typeof import('../provider/provider.js');
 
 beforeAll(async () => {
   // Override ONLY createModel; re-export the real module for everything else.
-  const actual = await import('../provider/provider.js');
+  // A COPY of the exports: mock.module replaces a loaded module's exports in
+  // place, so the namespace object itself would turn into the mock.
+  real = { ...(await import('../provider/provider.js')) };
   let call = 0;
   const scriptedModel = {
     config: { name: 'Stub Model' },
@@ -45,9 +48,16 @@ beforeAll(async () => {
     },
   };
   mock.module('../provider/provider.js', () => ({
-    ...actual,
+    ...real,
     createModel: () => scriptedModel,
   }));
+});
+
+// mock.module is process-wide and neither mock.restore() nor a later bun
+// file boundary undoes it, and bun runs test files in sorted order: put the
+// real exports back, or every later file gets the scripted model.
+afterAll(() => {
+  mock.module('../provider/provider.js', () => real);
 });
 
 function pressEnter(instance: ReturnType<typeof render>, text: string): void {

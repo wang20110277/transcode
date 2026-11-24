@@ -1,3 +1,4 @@
+import { quietLibraryNoise } from './provider/library-noise.js';
 import { VERSION } from './version.js';
 
 const USAGE = `transcode v${VERSION}
@@ -43,6 +44,9 @@ export async function runCli(argv: string[]): Promise<void> {
       return;
     }
     const { runAcpServer } = await import('./acp/server.js');
+    // No Ink here to own the console: keep LangChain's per-chunk merge
+    // warnings out of the host's stderr ourselves.
+    quietLibraryNoise();
     await runAcpServer();
     return;
   }
