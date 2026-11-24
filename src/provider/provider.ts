@@ -463,33 +463,84 @@ function buildChatModel(
   });
 }
 
+/** True when the URL path already ends in an API version segment (/v1, /v4, /v1beta…). */
+function hasVersionPath(url: string): boolean {
+  try {
+    return /\/v\d+[a-z]*$/i.test(new URL(url).pathname);
+  } catch {
+    return true; // not a URL — nothing sensible to suggest
+  }
+}
+
 /**
  * Connectivity check used by the /models flow: one minimal completion with a
- * short timeout. Returns a readable message for the UI either way.
+ * short timeout. Returns a readable message for the UI either way, plus the
+ * address that was actually verified.
+ *
+ * `staged` is a custom gateway still being set up: it is verified against the
+ * given address without being saved first, so a failed check never
+ * overwrites what is already configured.
  */
 export async function verifyModel(
   spec: string,
   apiKeyOverride?: string,
-): Promise<{ ok: boolean; message: string; served?: string }> {
-  const resolved = resolveModel(spec);
+  staged?: { baseUrl: string; model: string },
+): Promise<{ ok: boolean; message: string; served?: string; baseUrl?: string }> {
+  const resolved = staged
+    ? { ...resolveModel(spec), baseUrl: staged.baseUrl, model: staged.model }
+    : resolveModel(spec);
   const apiKey = apiKeyOverride?.trim() || lookupApiKey(resolved.id);
   if (!apiKey) {
     return { ok: false, message: `缺少 API key（${resolved.envKey}），请先输入。` };
   }
 
+  let baseUrl = baseUrlFor(resolved);
+  // A custom gateway can be saved with a root address (Claude Code's
+  // ANTHROPIC_BASE_URL style). Resolve the path the gateway actually serves,
+  // and remember it so the saved entry heals on its next verification. An
+  // explicit TRANSCODE_BASE_URL override is not the saved entry's address:
+  // resolving it must never rewrite the entry. Neither is a staged one.
+  if (baseUrl && isCustomModelSpec(resolved.id) && !process.env.TRANSCODE_BASE_URL) {
+    const effective = await resolveGatewayBaseUrl(baseUrl, apiKey);
+    if (effective !== baseUrl) {
+      baseUrl = effective;
+      if (!staged) rememberGatewayBaseUrl(resolved.id, effective);
+    }
+  }
   try {
-    const model = buildChatModel(resolved, apiKey, baseUrlFor(resolved), 16);
-    const response = (await Promise.race([
-      model.invoke('ping'),
+    const model = buildChatModel(resolved, apiKey, baseUrl, 16);
+    // generate(), not invoke(): invoke() indexes generations[0][0].message
+    // unchecked, so a gateway answering 200 with a non-completion body
+    // (NewAPI serves its web page on every non-/v1 path) surfaces as a bare
+    // TypeError. generate() hands the empty result back for a real reason.
+    const { generations } = await Promise.race([
+      model.generate([['ping']]),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('连接超时（10s）')), 10_000).unref?.(),
       ),
-    ])) as { response_metadata?: { model_name?: string } };
-
-    const served = response?.response_metadata?.model_name;
+    ]);
+    // LLMResult is typed with the text-only Generation; a chat model's
+    // entries also carry the reply message.
+    const first = generations[0]?.[0] as { message?: { response_metadata?: Record<string, unknown> } } | undefined;
+    if (!first) {
+      // A 2xx without a completion: the address points at a web page or a
+      // non-OpenAI API. A root address (Claude Code's ANTHROPIC_BASE_URL
+      // style) is the usual cause — the OpenAI-style path carries /v1.
+      const hint =
+        baseUrl && !hasVersionPath(baseUrl) ? `，例如 ${baseUrl.replace(/\/+$/, '')}/v1` : '';
+      return {
+        ok: false,
+        message:
+          '网关返回的不是模型响应（HTTP 成功但内容不是 OpenAI 格式，通常是地址指向了网页或非 API 路径）。' +
+          `请确认 BASE_URL 是 OpenAI 兼容的 API 根路径${hint}。`,
+      };
+    }
+    const modelName = first.message?.response_metadata?.model_name;
+    const served = typeof modelName === 'string' ? modelName : undefined;
     return {
       ok: true,
       served,
+      baseUrl,
       message: `连通正常${served ? `（实际模型 ${served}）` : ''}`,
     };
   } catch (error) {
@@ -555,10 +606,104 @@ export function lookupApiKey(specOrId: string): string | undefined {
   return apiKeyFor(resolved.envKey) || undefined;
 }
 
-/** Persist the custom gateway chosen in the /models flow. */
+/** Persists the custom gateway chosen in the /models flow. */
 export function setCustomModel(custom: { baseUrl: string; model: string }): void {
   const cfg = loadConfig();
   cfg.custom = { baseUrl: custom.baseUrl, model: custom.model };
+  saveConfig(cfg);
+}
+
+/** A saved OpenAI-compatible gateway the /models flow can switch to. */
+export interface CustomGatewayEntry {
+  /** Spec to switch with: "custom" for the legacy slot, the profile name otherwise. */
+  spec: string;
+  model: string;
+  baseUrl: string;
+}
+
+/** True for the custom slot, a custom:MODEL spec, or a saved custom gateway (user profile). */
+export function isCustomModelSpec(spec: string): boolean {
+  return spec === 'custom' || spec.startsWith('custom:') || loadConfig().profiles?.[spec] !== undefined;
+}
+
+/**
+ * Saved custom gateways: the legacy `custom` slot plus every user profile
+ * naming both an address and a model (resolveModel treats each profile as an
+ * OpenAI-compatible endpoint).
+ */
+export function listCustomGateways(): CustomGatewayEntry[] {
+  const cfg = loadConfig();
+  const entries: CustomGatewayEntry[] = [];
+  if (cfg.custom?.baseUrl && cfg.custom.model) {
+    entries.push({ spec: 'custom', model: cfg.custom.model, baseUrl: cfg.custom.baseUrl });
+  }
+  for (const [name, profile] of Object.entries(cfg.profiles ?? {})) {
+    if (profile?.baseUrl && profile.model) {
+      entries.push({ spec: name, model: profile.model, baseUrl: profile.baseUrl });
+    }
+  }
+  return entries;
+}
+
+/** Characters a model spec can carry (no ":" or "/" — resolveModel would parse those). */
+function nameSlug(text: string): string {
+  return text.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+/**
+ * Name for a saved custom gateway: the model id, plus the gateway host once
+ * the same model id already names another endpoint or a built-in vendor.
+ * Re-creating the same model on the same gateway keeps its name, so that
+ * entry is updated in place instead of duplicated.
+ */
+export function customProfileName(model: string, baseUrl: string): string {
+  const profiles = loadConfig().profiles ?? {};
+  const usable = (name: string): boolean => {
+    const existing = Object.prototype.hasOwnProperty.call(profiles, name) ? profiles[name] : undefined;
+    if (existing) return existing.baseUrl === baseUrl && existing.model === model;
+    return !isKnownModelId(name);
+  };
+  const base = nameSlug(model) || 'model';
+  if (usable(base)) return base;
+  let host = 'gateway';
+  try {
+    host = nameSlug(new URL(baseUrl).host) || 'gateway';
+  } catch {
+    // unparsable address — the generic suffix still keeps the name unique
+  }
+  const qualified = `${base}@${host}`;
+  for (let n = 1; ; n++) {
+    const name = n === 1 ? qualified : `${qualified}-${n}`;
+    if (usable(name)) return name;
+  }
+}
+
+/** Persists a custom gateway chosen in the /models flow as a user profile, so several can coexist. */
+export function saveCustomProfile(custom: { baseUrl: string; model: string }): string {
+  const name = customProfileName(custom.model, custom.baseUrl);
+  const cfg = loadConfig();
+  cfg.profiles = {
+    ...(cfg.profiles ?? {}),
+    [name]: { baseUrl: custom.baseUrl, model: custom.model, keyId: name },
+  };
+  saveConfig(cfg);
+  return name;
+}
+
+/**
+ * Remembers the path a saved custom gateway or user profile actually serves
+ * (a root address heals into its versioned one).
+ */
+function rememberGatewayBaseUrl(id: string, baseUrl: string): void {
+  const cfg = loadConfig();
+  const profile = cfg.profiles?.[id];
+  if (profile) {
+    cfg.profiles = { ...cfg.profiles, [id]: { ...profile, baseUrl } };
+  } else if (cfg.custom && (id === 'custom' || id.startsWith('custom:'))) {
+    cfg.custom = { ...cfg.custom, baseUrl };
+  } else {
+    return; // nothing saved to heal
+  }
   saveConfig(cfg);
 }
 
@@ -594,21 +739,9 @@ function newestFirst(a: string, b: string): number {
   return a.localeCompare(b);
 }
 
-/**
- * Live model list from an endpoint's OpenAI-compatible GET /models, so the
- * /models picker shows what the gateway actually serves (Zhipu's coding
- * endpoint, for one, maps old names to newer generations). Empty list on
- * any failure — callers fall back to the curated list. The override form
- * queries an in-progress custom gateway before it is saved.
- */
-export async function listEndpointModels(
-  specOrId: string,
-  override?: { baseUrl?: string; apiKey?: string },
-): Promise<string[]> {
+/** GET {baseUrl}/models on an OpenAI-compatible gateway: the served ids, or [] when it is not one. */
+async function fetchEndpointModels(baseUrl: string, apiKey?: string): Promise<string[]> {
   try {
-    const baseUrl = (override?.baseUrl ?? baseUrlFor(resolveModel(specOrId)))?.replace(/\/$/, '');
-    if (!baseUrl) return [];
-    const apiKey = override?.apiKey ?? lookupApiKey(resolveModel(specOrId).id);
     const response = await Promise.race([
       fetch(`${baseUrl}/models`, {
         headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
@@ -626,6 +759,44 @@ export async function listEndpointModels(
   } catch {
     return [];
   }
+}
+
+/**
+ * Live model list from an endpoint's OpenAI-compatible GET /models, so the
+ * /models picker shows what the gateway actually serves (Zhipu's coding
+ * endpoint, for one, maps old names to newer generations). Empty list on
+ * any failure — callers fall back to the curated list. The override form
+ * queries an in-progress custom gateway before it is saved.
+ */
+export async function listEndpointModels(
+  specOrId: string,
+  override?: { baseUrl?: string; apiKey?: string },
+): Promise<string[]> {
+  try {
+    const baseUrl = (override?.baseUrl ?? baseUrlFor(resolveModel(specOrId)))?.replace(/\/$/, '');
+    if (!baseUrl) return [];
+    const apiKey = override?.apiKey ?? lookupApiKey(resolveModel(specOrId).id);
+    return fetchEndpointModels(baseUrl, apiKey);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Effective OpenAI-style base URL for an address typed by the user. Claude
+ * Code's ANTHROPIC_BASE_URL is the gateway root (http://host:3000) while
+ * OpenAI-style clients need the versioned path (http://host:3000/v1): on
+ * NewAPI every non-/v1 path answers 200 with the web page, so the root
+ * address fails only as an empty completion. The typed URL wins when its
+ * /models answers; an unversioned path is then probed once with /v1
+ * appended. Anything else comes back as typed.
+ */
+export async function resolveGatewayBaseUrl(baseUrl: string, apiKey?: string): Promise<string> {
+  const typed = baseUrl.trim().replace(/\/+$/, '');
+  if (hasVersionPath(typed)) return typed;
+  if ((await fetchEndpointModels(typed, apiKey)).length > 0) return typed;
+  const versioned = `${typed}/v1`;
+  return (await fetchEndpointModels(versioned, apiKey)).length > 0 ? versioned : typed;
 }
 
 /** Set (or clear with "-") a role's profile. */

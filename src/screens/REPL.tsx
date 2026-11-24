@@ -9,12 +9,16 @@ import {
   setPreferredModel,
   registerApiKey,
   lookupApiKey,
-  setCustomModel,
+  saveCustomProfile,
   listEndpointModels,
+  resolveGatewayBaseUrl,
+  isCustomModelSpec,
+  listCustomGateways,
   vendorModelSpec,
   vendorModels,
   verifyModel,
   switchNote,
+  type CustomGatewayEntry,
   type ModelId,
 } from '../provider/provider.js';
 import { CONTEXT_BUDGET_CHOICES, loadConfig, normalizeAutoCompact, writeContextTokens } from '../config.js';
@@ -76,6 +80,7 @@ interface HistoryEntry {
 type PromptPhase =
   | 'idle'
   | 'model_select'
+  | 'custom_list'
   | 'model_pick'
   | 'model_name'
   | 'custom_baseurl'
@@ -158,10 +163,22 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
     setPendingModel(id);
   };
   const [modelCursor, setModelCursor] = useState(0);
+  // /models "custom" vendor: the saved custom gateways (each with its
+  // address) followed by "+ 新建自定义模型…".
+  const [customEntries, setCustomEntries] = useState<CustomGatewayEntry[]>([]);
+  const [customCursor, setCustomCursor] = useState(0);
   // /models budget step: cursor over CONTEXT_BUDGET_CHOICES; the verified
   // switch args wait here while the user picks a context budget.
   const [modelContextCursor, setModelContextCursor] = useState(0);
-  const pendingSwitchRef = useRef<{ spec: string; displayName: string; apiKey: string; message: string; served?: string } | null>(null);
+  const pendingSwitchRef = useRef<{
+    spec: string;
+    displayName: string;
+    apiKey: string;
+    message: string;
+    served?: string;
+    /** A custom gateway set up in this flow: saved as its own entry once the switch applies. */
+    newCustom?: { baseUrl: string; model: string };
+  } | null>(null);
 
   // /search setup flow: cursor over SEARCH_PROVIDERS, ref carries the pick.
   const [searchCursor, setSearchCursor] = useState(0);
@@ -739,7 +756,10 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
   );
 
   const enterModelSelect = useCallback(() => {
-    const currentIdx = models.findIndex(m => m.id === ctx.modelId);
+    // Start on the current model; a saved custom gateway counts as "custom".
+    const currentIdx = models.findIndex(
+      m => m.id === ctx.modelId || (m.id === 'custom' && isCustomModelSpec(ctx.modelId)),
+    );
     setModelCursor(currentIdx >= 0 ? currentIdx : 0);
     setPhase('model_select');
   }, [ctx.modelId, models]);
@@ -760,14 +780,28 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
   );
 
   const applyModelSwitch = useCallback(
-    (spec: string, displayName: string, apiKey: string, checkMessage: string, served?: string) => {
-      registerApiKey(spec.split(':')[0]!, apiKey);
-      ctx.setModelId(spec);
-      setPreferredModel(spec);
-      const pickedModel = spec.split(':').pop() ?? displayName;
+    (
+      spec: string,
+      displayName: string,
+      apiKey: string,
+      checkMessage: string,
+      served?: string,
+      /** A custom gateway set up in this flow: saved as its own entry, then switched to. */
+      newCustom?: { baseUrl: string; model: string },
+    ) => {
+      let target = spec;
+      let label = displayName;
+      if (newCustom) {
+        target = saveCustomProfile(newCustom);
+        label = target;
+      }
+      registerApiKey(target.split(':')[0]!, apiKey);
+      ctx.setModelId(target);
+      setPreferredModel(target);
+      const pickedModel = target.split(':').pop() ?? label;
       addHistory({
         input: '••••••••',
-        output: `${checkMessage} — ${switchNote(displayName, pickedModel, served)}`,
+        output: `${checkMessage} — ${switchNote(label, pickedModel, served)}`,
       });
       setPendingSpec(null);
       setPendingDisplayName('');
@@ -782,18 +816,34 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
     [ctx, addHistory, dragFlush],
   );
 
-  /** Verify a selection and apply it, or surface the error and re-prompt. */
+  /**
+   * Verify a selection and apply it, or surface the error and re-prompt.
+   * `staged` is a custom gateway still being set up: it is checked against
+   * the typed address and only saved (as its own entry) once it passes.
+   */
   const finalizeSelection = useCallback(
-    async (spec: string, displayName: string, apiKey: string) => {
+    async (
+      spec: string,
+      displayName: string,
+      apiKey: string,
+      staged?: { baseUrl: string; model: string },
+    ) => {
       if (process.env.TRANSCODE_SKIP_MODEL_CHECK === '1') {
-        applyModelSwitch(spec, displayName, apiKey, '已跳过连通性测试');
+        applyModelSwitch(spec, displayName, apiKey, '已跳过连通性测试', undefined, staged);
         return;
       }
       setPhase('model_check');
-      const result = await verifyModel(spec, apiKey);
+      const result = await verifyModel(spec, apiKey, staged);
       if (result.ok) {
         // Budget picker sits between verification and applying the switch.
-        pendingSwitchRef.current = { spec, displayName, apiKey, message: `✓ ${result.message}`, served: result.served };
+        pendingSwitchRef.current = {
+          spec,
+          displayName,
+          apiKey,
+          message: `✓ ${result.message}`,
+          served: result.served,
+          newCustom: staged ? { baseUrl: result.baseUrl ?? staged.baseUrl, model: staged.model } : undefined,
+        };
         setModelContextCursor(0);
         setPhase('model_context');
         commitInput('');
@@ -868,6 +918,11 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
           addHistory({ input: '••••••••', output: 'API key 不能为空。' });
           return;
         }
+        // The address may be typed Claude-Code-style (the gateway root, as in
+        // ANTHROPIC_BASE_URL): resolve the path the gateway actually serves
+        // and keep it — it is what gets saved for this gateway.
+        const effective = await resolveGatewayBaseUrl(customBaseDraft, apiKey);
+        setCustomBaseDraft(effective);
         setCustomKeyDraft(apiKey);
         setPickOptions([]);
         setPickCursor(0);
@@ -875,7 +930,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
         setPhase('model_pick');
         commitInput('');
         setPickLoading(true);
-        const live = await listEndpointModels('', { baseUrl: customBaseDraft, apiKey });
+        const live = await listEndpointModels('', { baseUrl: effective, apiKey });
         setPickOptions(live);
         setPickLive(live.length > 0);
         setPickLoading(false);
@@ -929,7 +984,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       pendingSwitchRef.current = null;
       writeContextTokens(pending.spec, tokens);
       setPhase('idle');
-      applyModelSwitch(pending.spec, pending.displayName, pending.apiKey, pending.message, pending.served);
+      applyModelSwitch(pending.spec, pending.displayName, pending.apiKey, pending.message, pending.served, pending.newCustom);
       commitInput('');
       return;
     }
@@ -959,8 +1014,10 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       if (!trimmed) return;
       if (pendingModel === null) {
         // Custom gateway, free-text model name (live list was empty/unreachable).
-        setCustomModel({ baseUrl: customBaseDraft, model: trimmed });
-        await finalizeSelection('custom', `custom/${trimmed}`, customKeyDraft);
+        await finalizeSelection('custom', `custom/${trimmed}`, customKeyDraft, {
+          baseUrl: customBaseDraft,
+          model: trimmed,
+        });
       } else {
         beginKeyStep(vendorModelSpec(pendingModel, trimmed), `${pendingModel}/${trimmed}`);
       }
@@ -1258,7 +1315,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
         pendingSwitchRef.current = null;
         setPhase('idle');
         commitInput('');
-        applyModelSwitch(pending.spec, pending.displayName, pending.apiKey, pending.message, pending.served);
+        applyModelSwitch(pending.spec, pending.displayName, pending.apiKey, pending.message, pending.served, pending.newCustom);
         return;
       }
       // While generating, Esc cancels instead of exiting.
@@ -1266,6 +1323,11 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
         // Busy covers both a live agent turn (abort it) and async
         // compaction (no controller yet — Esc must not quit the app).
         abortRef.current?.abort();
+        return;
+      }
+      // The custom gateway list is a sub-menu of the vendor list: back one level.
+      if (phase === 'custom_list') {
+        setPhase('model_select');
         return;
       }
       if (phase !== 'idle') {
@@ -1312,7 +1374,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
         const pending = pendingSwitchRef.current;
         pendingSwitchRef.current = null;
         setPhase('idle');
-        if (pending) applyModelSwitch(pending.spec, pending.displayName, pending.apiKey, pending.message, pending.served);
+        if (pending) applyModelSwitch(pending.spec, pending.displayName, pending.apiKey, pending.message, pending.served, pending.newCustom);
         return;
       }
       if (key.return) {
@@ -1327,7 +1389,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
         writeContextTokens(pending.spec, choice.tokens);
         setPhase('idle');
         commitInput('');
-        applyModelSwitch(pending.spec, pending.displayName, pending.apiKey, pending.message, pending.served);
+        applyModelSwitch(pending.spec, pending.displayName, pending.apiKey, pending.message, pending.served, pending.newCustom);
         return;
       }
       return;
@@ -1359,14 +1421,12 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       if (key.return) {
         const selected = models[modelCursor];
         if (selected.id === 'custom') {
-          const saved = loadConfig().custom;
+          // Never straight to the key prompt: the saved gateways are listed
+          // with their addresses, and a new one can be added next to them.
           setVendor(null);
-          if (saved?.baseUrl && saved.model) {
-            beginKeyStep('custom', `custom/${saved.model}`);
-          } else {
-            setPhase('custom_baseurl');
-            commitInput('');
-          }
+          setCustomEntries(listCustomGateways());
+          setCustomCursor(0);
+          setPhase('custom_list');
           return;
         }
         setVendor(selected.id);
@@ -1419,6 +1479,30 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       return;
     }
 
+    if (phase === 'custom_list') {
+      const rows = customEntries.length + 1; // + "新建自定义模型…"
+      if (key.return) {
+        const entry = customEntries[customCursor];
+        if (entry) {
+          // Saved gateway: its key prompt (Enter reuses the saved key), as before.
+          beginKeyStep(entry.spec, entry.spec === 'custom' ? `custom/${entry.model}` : entry.spec);
+        } else {
+          setPhase('custom_baseurl');
+          commitInput('');
+        }
+        return;
+      }
+      if (key.upArrow) {
+        setCustomCursor(prev => (prev - 1 + rows) % rows);
+        return;
+      }
+      if (key.downArrow) {
+        setCustomCursor(prev => (prev + 1) % rows);
+        return;
+      }
+      return;
+    }
+
     if (phase === 'session_select') {
       const picker = sessionPickerRef.current;
       if (picker.length === 0) return;
@@ -1452,8 +1536,10 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
         const modelName = pickOptions[pickCursor]!;
         if (pendingModel === null && customBaseDraft) {
           // Custom gateway: model chosen from the live list.
-          setCustomModel({ baseUrl: customBaseDraft, model: modelName });
-          void finalizeSelection('custom', `custom/${modelName}`, customKeyDraft);
+          void finalizeSelection('custom', `custom/${modelName}`, customKeyDraft, {
+            baseUrl: customBaseDraft,
+            model: modelName,
+          });
         } else if (vendorKeyDraft) {
           // Key-first flow: the key was just typed — verify without
           // re-asking for it (applyModelSwitch persists it on success).
@@ -1724,12 +1810,29 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
                 {i === modelCursor ? '❯ ' : '  '}
                 {m.id.padEnd(10)} {m.name}
               </Text>
-              {m.id === ctx.modelId && (
+              {(m.id === ctx.modelId || (m.id === 'custom' && isCustomModelSpec(ctx.modelId))) && (
                 <Text color="yellow"> (current)</Text>
               )}
             </Box>
           ))}
           <Text color="gray" dimColor>↑↓ 选择厂商 · Enter 进入模型列表</Text>
+        </Box>
+      )}
+
+      {phase === 'custom_list' && (
+        <Box flexDirection="column" marginLeft={2}>
+          <Text color="gray" dimColor>自定义模型 (↑↓ 选择 · Enter 使用 · Esc 返回)</Text>
+          {customEntries.map((entry, i) => (
+            <Box key={entry.spec}>
+              <Text color={i === customCursor ? 'cyan' : undefined}>
+                {i === customCursor ? '❯ ' : '  '}{entry.model}
+              </Text>
+              <Text color="gray" dimColor>  {entry.baseUrl}</Text>
+            </Box>
+          ))}
+          <Text color={customCursor === customEntries.length ? 'cyan' : 'green'}>
+            {customCursor === customEntries.length ? '❯ ' : '  '}+ 新建自定义模型…
+          </Text>
         </Box>
       )}
 
@@ -1808,7 +1911,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
         </Box>
       )}
 
-      {phase !== 'model_select' && phase !== 'session_select' && (
+      {phase !== 'model_select' && phase !== 'session_select' && phase !== 'custom_list' && (
         <Box flexDirection="column">
           {inputQueue.length > 0 && (
             <Box flexDirection="column" marginLeft={2}>
