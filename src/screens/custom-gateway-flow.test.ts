@@ -251,4 +251,24 @@ describe('custom gateways in /models', () => {
     await press(instance, '\r'); // default budget → the switch is applied
     expect(picks.at(-1)).toBe('qwen3.6-35b-fp8');
   });
+
+  test('the context budget picked for a new gateway is recorded under that entry, not under the staging name', async () => {
+    const root = startGateway();
+    const instance = mount();
+    await settle();
+
+    await openCustomGateways(instance);
+    await press(instance, '\r'); // + 新建自定义模型…
+    await submit(instance, root);
+    await submit(instance, 'k');
+    await settle();
+    await press(instance, '\r'); // the live-list entry: verify, then budget picker
+    await settle();
+    await press(instance, '\x1b[B'); // second choice: 128k
+    await press(instance, '\r'); // apply
+
+    const byModel = loadConfig().autoCompact?.byModel ?? {};
+    expect(byModel['qwen3.6-35b-fp8']).toBe(128_000);
+    expect(byModel['custom']).toBeUndefined(); // "custom" is the legacy entry's budget key
+  });
 });

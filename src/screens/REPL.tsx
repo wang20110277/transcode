@@ -14,6 +14,7 @@ import {
   resolveGatewayBaseUrl,
   isCustomModelSpec,
   listCustomGateways,
+  customProfileName,
   vendorModelSpec,
   vendorModels,
   verifyModel,
@@ -172,6 +173,8 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
   const [modelContextCursor, setModelContextCursor] = useState(0);
   const pendingSwitchRef = useRef<{
     spec: string;
+    /** Id the switch ends on (the new gateway's own name when it creates one). */
+    target: string;
     displayName: string;
     apiKey: string;
     message: string;
@@ -836,13 +839,19 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       const result = await verifyModel(spec, apiKey, staged);
       if (result.ok) {
         // Budget picker sits between verification and applying the switch.
+        const newCustom = staged
+          ? { baseUrl: result.baseUrl ?? staged.baseUrl, model: staged.model }
+          : undefined;
         pendingSwitchRef.current = {
           spec,
+          // The budget picked next is recorded under the id the switch ends
+          // on: a new custom gateway's own name, not the staging spec.
+          target: newCustom ? customProfileName(newCustom.model, newCustom.baseUrl) : spec,
           displayName,
           apiKey,
           message: `✓ ${result.message}`,
           served: result.served,
-          newCustom: staged ? { baseUrl: result.baseUrl ?? staged.baseUrl, model: staged.model } : undefined,
+          newCustom,
         };
         setModelContextCursor(0);
         setPhase('model_context');
@@ -982,7 +991,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       }
       const pending = pendingSwitchRef.current!;
       pendingSwitchRef.current = null;
-      writeContextTokens(pending.spec, tokens);
+      writeContextTokens(pending.target, tokens);
       setPhase('idle');
       applyModelSwitch(pending.spec, pending.displayName, pending.apiKey, pending.message, pending.served, pending.newCustom);
       commitInput('');
@@ -1386,7 +1395,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
           return;
         }
         pendingSwitchRef.current = null;
-        writeContextTokens(pending.spec, choice.tokens);
+        writeContextTokens(pending.target, choice.tokens);
         setPhase('idle');
         commitInput('');
         applyModelSwitch(pending.spec, pending.displayName, pending.apiKey, pending.message, pending.served, pending.newCustom);
