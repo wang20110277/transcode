@@ -17,6 +17,22 @@ function parseMode(value: string | undefined): PermissionMode {
 
 let currentMode: PermissionMode = parseMode(process.env.TRANSCODE_PERMISSION_MODE);
 
+type PermissionModeListener = (mode: PermissionMode) => void;
+const listeners = new Set<PermissionModeListener>();
+
+/** Notified on every mode change (the REPL's mode indicator subscribes). Returns an unsubscribe fn. */
+export function subscribePermissionMode(listener: PermissionModeListener): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+function applyMode(mode: PermissionMode): void {
+  currentMode = mode;
+  for (const listener of listeners) listener(mode);
+}
+
 export function getPermissionMode(): PermissionMode {
   return currentMode;
 }
@@ -31,10 +47,10 @@ export function setPermissionMode(mode: PermissionMode): void {
   if (!PERMISSION_MODES.includes(mode)) {
     throw new Error(`Unknown permission mode: ${mode}. Valid: ${PERMISSION_MODES.join(', ')}`);
   }
-  currentMode = mode;
+  applyMode(mode);
 }
 
 /** Re-reads the environment variable (used at startup and in tests). */
 export function resetPermissionMode(): void {
-  currentMode = parseMode(process.env.TRANSCODE_PERMISSION_MODE);
+  applyMode(parseMode(process.env.TRANSCODE_PERMISSION_MODE));
 }

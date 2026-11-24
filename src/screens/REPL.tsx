@@ -1,5 +1,5 @@
 import { Box, Static, Text, useInput, useApp, useStdout } from 'ink';
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import path from 'node:path';
 import { executeCommand, findCommand, getCommands, type CommandContext } from '../commands.js';
 import {
@@ -28,7 +28,7 @@ import {
 import { VERSION } from '../version.js';
 import { runAgentLoop, type PermissionRequest } from '../agent/loop.js';
 import { createToolSession } from '../agent/tools/index.js';
-import { getPermissionMode, nextPermissionMode, setPermissionMode } from '../agent/permission.js';
+import { getPermissionMode, nextPermissionMode, setPermissionMode, subscribePermissionMode, type PermissionMode } from '../agent/permission.js';
 import {
   buildSessionRecord,
   generateTitle,
@@ -92,6 +92,12 @@ type PromptPhase =
 
 /** Providers offered by the /search setup flow (mirrors normalizeWebSearchConfig). */
 const SEARCH_PROVIDERS: WebSearchConfig['provider'][] = ['tavily', 'brave'];
+
+/**
+ * Mode indicator (bottom-left, under the input box): color of the mode name —
+ * green prompts before mutating tools, red prompts for nothing, blue denies them.
+ */
+const MODE_COLOR: Record<PermissionMode, string> = { ask: 'green', auto: 'red', readonly: 'blue' };
 
 interface REPLProps {
   ctx: CommandContext;
@@ -187,6 +193,10 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
   const dragFlush = useCallback(() => {
     setTimeout(() => setFlushTick(t => t + 1), 0);
   }, []);
+
+  // Permission mode lives in the agent/permission.ts module store: subscribing
+  // keeps the mode indicator current for every switch path (Shift+Tab, /mode).
+  const permMode = useSyncExternalStore(subscribePermissionMode, getPermissionMode);
 
   const addHistory = useCallback((entry: HistoryEntry) => {
     setChat(prev => ({ ...prev, history: [...prev.history, entry] }));
@@ -1588,11 +1598,12 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
   // Live-region tail window: keep the interactive frame shorter than the
   // terminal or Ink falls back to clearing + repainting everything.
   // Wrapped-row budget (review finding: Ink counts folded screen rows, so
-  // logical-line budgets blow on long CJK/diff lines): rows-12 with wide
-  // chars measured at 2 columns, columns-2 for paddingX.
+  // logical-line budgets blow on long CJK/diff lines): rows-13 with wide
+  // chars measured at 2 columns, columns-2 for paddingX. The 13 counts the
+  // fixed rows around the tail (turn echo, input box + mode indicator, …).
   const liveTail = sliceLiveTail(
     chat.liveOutput,
-    (stdout?.rows ?? 24) - 12,
+    (stdout?.rows ?? 24) - 13,
     (stdout?.columns ?? 80) - 2,
   );
 
@@ -1813,6 +1824,12 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
             <Text color="gray">▎</Text>
           </Box>
           <Text color="gray" dimColor>{historyRule(stdout?.columns ?? 80)}</Text>
+          {/* Mode indicator: its own line, bottom-left of the input box. */}
+          <Box>
+            <Text color="gray" dimColor>mode: </Text>
+            <Text color={MODE_COLOR[permMode]} bold>{permMode}</Text>
+            <Text color="gray" dimColor> · (shift+tab to cycle) · esc to interrupt</Text>
+          </Box>
         </Box>
       )}
 

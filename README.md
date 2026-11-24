@@ -101,7 +101,7 @@ bun run test:acp:real        # 完整 ACP + 工具调用（会创建临时 works
 | --- | --- |
 | `TRANSCODE_MODEL` | 默认模型。注册表 id、档案名、`provider:model`，或裸模型名 |
 | `TRANSCODE_DEFAULT_PROVIDER` | 裸模型名走哪个 provider，默认 `openai` |
-| `TRANSCODE_PERMISSION_MODE` | `ask`（默认） / `auto` / `readonly`；REPL 里可用 `/mode` 运行时切换 |
+| `TRANSCODE_PERMISSION_MODE` | `ask`（默认） / `auto` / `readonly`；REPL 里可用 `/mode` 或 Shift+Tab 运行时切换，当前模式常驻显示在输入框左下角（`mode: ask · (shift+tab to cycle) · esc to interrupt`） |
 | `TRANSCODE_ALLOW_OUTSIDE_CWD` | 设为 `1` 才允许读写工作区之外的路径 |
 | `TRANSCODE_BASE_URL` | 覆盖当前模型的 base URL（所有 provider） |
 | `TRANSCODE_MAX_TOKENS` | 单次回复的 `max_tokens`，默认 `8192` |

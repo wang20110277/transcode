@@ -4,6 +4,8 @@ import {
   PERMISSION_MODES,
   resetPermissionMode,
   setPermissionMode,
+  subscribePermissionMode,
+  type PermissionMode,
 } from './permission.js';
 
 const savedEnv: string | undefined = process.env.TRANSCODE_PERMISSION_MODE;
@@ -46,6 +48,18 @@ describe('permission mode', () => {
 
   test('documents the mode list', () => {
     expect(PERMISSION_MODES).toEqual(['ask', 'auto', 'readonly']);
+  });
+});
+
+describe('subscribePermissionMode', () => {
+  test('切换模式会通知订阅者新模式;退订后不再通知', () => {
+    const seen: PermissionMode[] = [];
+    const unsubscribe = subscribePermissionMode(mode => seen.push(mode));
+    setPermissionMode('auto');
+    setPermissionMode('readonly');
+    unsubscribe();
+    setPermissionMode('ask');
+    expect(seen).toEqual(['auto', 'readonly']);
   });
 });
 
