@@ -2,13 +2,15 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { loadConfig, saveConfig } from '../config.js';
+import { loadConfig, saveConfig, writeContextTokens } from '../config.js';
 import {
   customProfileName,
+  deleteCustomGateway,
   isCustomModelSpec,
   listCustomGateways,
   lookupApiKey,
   registerApiKey,
+  registeredApiKey,
   resolveModel,
   saveCustomProfile,
   setCustomModel,
@@ -127,5 +129,105 @@ describe('listCustomGateways', () => {
     saveConfig({ ...cfg, profiles: { ...cfg.profiles, broken: { baseUrl: 'https://x.example/v1', model: '' } } });
 
     expect(listCustomGateways().map(entry => entry.spec)).toEqual(['glm-4.6']);
+  });
+});
+
+describe('deleteCustomGateway', () => {
+  test('removes the entry, its key and its context budget, leaving everything else alone', () => {
+    saveCustomProfile({ baseUrl: 'https://b.example/v1', model: 'glm-4.6' });
+    saveCustomProfile({ baseUrl: 'https://a.example/v1', model: 'qwen' });
+    registerApiKey('glm-4.6', 'sk-other');
+    registerApiKey('qwen', 'sk-entry');
+    writeContextTokens('glm-4.6', 64_000);
+    writeContextTokens('qwen', 128_000);
+    const cfg = loadConfig();
+    saveConfig({ ...cfg, autoCompact: { ...cfg.autoCompact, contextTokens: 5_000, keepTurns: 2 } });
+
+    const removed = deleteCustomGateway('qwen');
+
+    expect(removed).toEqual({ model: 'qwen', baseUrl: 'https://a.example/v1', roles: [] });
+    expect(listCustomGateways().map(entry => entry.spec)).toEqual(['glm-4.6']);
+    expect(loadConfig().profiles).toEqual({
+      'glm-4.6': { baseUrl: 'https://b.example/v1', model: 'glm-4.6', keyId: 'glm-4.6' },
+    });
+    expect(loadConfig().apiKeys).toEqual({ 'glm-4.6': 'sk-other' });
+    expect(loadConfig().autoCompact).toEqual({
+      contextTokens: 5_000,
+      keepTurns: 2,
+      byModel: { 'glm-4.6': 64_000 },
+    });
+  });
+
+  test('forgets the key held in memory, so the same model added again is not handed the old one', () => {
+    saveCustomProfile({ baseUrl: 'https://a.example/v1', model: 'qwen' });
+    registerApiKey('qwen', 'sk-entry');
+    expect(registeredApiKey('qwen')).toBe('sk-entry'); // held in memory before the removal
+
+    deleteCustomGateway('qwen');
+
+    expect(registeredApiKey('qwen')).toBeUndefined();
+  });
+
+  test('unassignes the roles that routed to it and leaves the other roles alone', () => {
+    saveCustomProfile({ baseUrl: 'https://a.example/v1', model: 'qwen' });
+    const cfg = loadConfig();
+    saveConfig({ ...cfg, routing: { analysis: 'qwen', design: 'opus', compact: 'qwen' } });
+
+    const removed = deleteCustomGateway('qwen');
+
+    expect(removed?.roles).toEqual(['analysis', 'compact']);
+    expect(loadConfig().routing).toEqual({ design: 'opus' });
+  });
+
+  test('keeps the key while another profile still uses it', () => {
+    saveCustomProfile({ baseUrl: 'https://a.example/v1', model: 'qwen' });
+    registerApiKey('qwen', 'sk-shared');
+    // A profile written by hand that borrows the entry's key.
+    const cfg = loadConfig();
+    saveConfig({
+      ...cfg,
+      profiles: { ...cfg.profiles, 'qwen-vision': { baseUrl: 'https://c.example/v1', model: 'qwen-vl', keyId: 'qwen' } },
+    });
+
+    deleteCustomGateway('qwen');
+
+    expect(loadConfig().apiKeys).toEqual({ qwen: 'sk-shared' });
+    expect(registeredApiKey('qwen')).toBe('sk-shared');
+  });
+
+  test('removes the legacy single slot with its key and the roles routing through it', () => {
+    setCustomModel({ baseUrl: 'http://10.162.5.19:3000/v1', model: 'qwen3.6-35b-fp8' });
+    registerApiKey('custom', 'sk-legacy');
+    writeContextTokens('custom', 256_000);
+    const cfg = loadConfig();
+    saveConfig({ ...cfg, routing: { analysis: 'custom', vision: 'custom:glm-4.6v', design: 'opus' } });
+
+    const removed = deleteCustomGateway('custom');
+
+    expect(removed).toEqual({
+      model: 'qwen3.6-35b-fp8',
+      baseUrl: 'http://10.162.5.19:3000/v1',
+      roles: ['analysis', 'vision'],
+    });
+    expect(listCustomGateways()).toEqual([]);
+    expect(loadConfig().apiKeys?.custom).toBeUndefined();
+    expect(registeredApiKey('custom')).toBeUndefined();
+    expect(loadConfig().autoCompact?.byModel?.custom).toBeUndefined();
+    expect(loadConfig().routing).toEqual({ design: 'opus' });
+  });
+
+  test('refuses a name the list does not show and leaves the config as it was', () => {
+    saveCustomProfile({ baseUrl: 'https://a.example/v1', model: 'qwen' });
+    registerApiKey('glm', 'sk-glm'); // a built-in vendor's key
+    const cfg = loadConfig();
+    saveConfig({ ...cfg, profiles: { ...cfg.profiles, broken: { baseUrl: 'https://x.example/v1', model: '' } } });
+    const before = structuredClone(loadConfig());
+
+    expect(deleteCustomGateway('nope')).toBeNull();
+    expect(deleteCustomGateway('glm')).toBeNull();
+    expect(deleteCustomGateway('custom')).toBeNull(); // the legacy slot was never saved
+    expect(deleteCustomGateway('broken')).toBeNull();
+
+    expect(loadConfig()).toEqual(before);
   });
 });

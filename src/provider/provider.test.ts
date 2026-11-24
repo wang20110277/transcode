@@ -14,6 +14,7 @@ import {
   vendorModels,
   verifyModel,
   switchNote,
+  deletedGatewayNote,
 } from './provider.js';
 
 let configDir: string;
@@ -148,6 +149,20 @@ describe('switchNote', () => {
   test('appends the effectively served model when it differs from the pick', () => {
     expect(switchNote('glmc/glm-4.6', 'glm-4.6', 'glm-5.3-flash')).toBe(
       '已切换到 glmc/glm-4.6（实际生效 glm-5.3-flash）',
+    );
+  });
+});
+
+describe('deletedGatewayNote', () => {
+  test('names the removed entry', () => {
+    expect(deletedGatewayNote({ model: 'qwen', baseUrl: 'https://a.example/v1', roles: [] })).toBe(
+      '已删除自定义模型 qwen（https://a.example/v1）',
+    );
+  });
+
+  test('lists the roles the removal unassigned', () => {
+    expect(deletedGatewayNote({ model: 'qwen', baseUrl: 'https://a.example/v1', roles: ['analysis', 'compact'] })).toBe(
+      '已删除自定义模型 qwen（https://a.example/v1） · 已解除角色路由: analysis, compact',
     );
   });
 });

@@ -120,10 +120,10 @@ const settle = (ms = 150): Promise<void> => new Promise(resolve => setTimeout(re
 
 type Instance = ReturnType<typeof render>;
 
-function mount(setModelId: (id: string) => void = () => {}): Instance {
+function mount(setModelId: (id: string) => void = () => {}, modelId: string = 'stub'): Instance {
   const instance = render(
     React.createElement(REPL, {
-      ctx: { modelId: 'stub', setModelId, clearHistory: () => {} },
+      ctx: { modelId, setModelId, clearHistory: () => {} },
       banner: { logo: 'LOGO', model: 'stub', dir: '/tmp' },
     }),
   );
@@ -417,6 +417,221 @@ describe('custom gateways in /models', () => {
       frame = plain(instance.lastFrame() ?? '');
       expect(frame).not.toContain('↑↓ 选择模型');
       expect(frame).toContain('Cancelled.');
+    });
+  });
+
+  describe('deleting a saved gateway', () => {
+    /** Two saved entries; the first is under the cursor when the list opens. */
+    function saveTwo(): void {
+      saveCustomProfile({ baseUrl: 'https://a.example/v1', model: 'alpha' });
+      saveCustomProfile({ baseUrl: 'https://b.example/v1', model: 'beta' });
+    }
+
+    test('d asks for confirmation and removes nothing until then', async () => {
+      saveTwo();
+      const instance = mount();
+      await settle();
+
+      await openCustomGateways(instance);
+      await press(instance, 'd');
+
+      const frame = plain(instance.lastFrame() ?? '');
+      expect(frame).toContain('删除 alpha');
+      expect(frame).toContain('y 确认');
+      expect(Object.keys(loadConfig().profiles ?? {})).toEqual(['alpha', 'beta']);
+    });
+
+    test('ctrl+d is not a delete request', async () => {
+      saveTwo();
+      const instance = mount();
+      await settle();
+
+      await openCustomGateways(instance);
+      await press(instance, '\x04');
+
+      expect(plain(instance.lastFrame() ?? '')).not.toContain('y 确认');
+    });
+
+    for (const key of ['y', 'Y']) {
+      test(`${JSON.stringify(key)} removes the entry, reports it, and the list no longer shows it`, async () => {
+        saveTwo();
+        registerApiKey('alpha', 'sk-alpha');
+        const instance = mount();
+        await settle();
+
+        await openCustomGateways(instance);
+        await press(instance, 'd');
+        await press(instance, key);
+
+        expect(Object.keys(loadConfig().profiles ?? {})).toEqual(['beta']);
+        expect(loadConfig().apiKeys?.alpha).toBeUndefined();
+        const frame = plain(instance.lastFrame() ?? '');
+        expect(frame).toContain('已删除自定义模型 alpha');
+        expect(frame).not.toContain('alpha  https://a.example/v1'); // the list row is gone…
+        expect(frame).toContain('beta  https://b.example/v1'); // …the other entry is not
+        expect(frame).not.toContain('y 确认');
+      });
+    }
+
+    test('a key other than y only dismisses the confirmation', async () => {
+      saveTwo();
+      registerApiKey('alpha', 'sk-alpha'); // Enter on the entry would offer to reuse it
+      const instance = mount();
+      await settle();
+
+      await openCustomGateways(instance);
+      await press(instance, 'd');
+      await press(instance, '\r'); // neither confirms nor uses the entry
+
+      const frame = plain(instance.lastFrame() ?? '');
+      expect(frame).not.toContain('y 确认');
+      expect(frame).not.toContain('回车沿用');
+      expect(frame).toContain('新建自定义模型'); // still the gateway list
+      expect(Object.keys(loadConfig().profiles ?? {})).toEqual(['alpha', 'beta']);
+
+      await press(instance, 'd'); // the list is back to normal: d asks again
+      expect(plain(instance.lastFrame() ?? '')).toContain('y 确认');
+    });
+
+    test('Esc dismisses the confirmation first and keeps the list open', async () => {
+      saveTwo();
+      const instance = mount();
+      await settle();
+
+      await openCustomGateways(instance);
+      await press(instance, 'd');
+      await press(instance, '\x1b');
+
+      const frame = plain(instance.lastFrame() ?? '');
+      expect(frame).not.toContain('y 确认');
+      expect(frame).toContain('新建自定义模型'); // still the gateway list…
+      expect(frame).not.toContain('选择厂商'); // …not the vendor list above it
+
+      await press(instance, '\x1b'); // the next Esc leaves the list, as before
+      expect(plain(instance.lastFrame() ?? '')).toContain('选择厂商');
+    });
+
+    test('the model in use is refused with a hint', async () => {
+      saveTwo();
+      const instance = mount(undefined, 'alpha'); // the session runs on the first entry
+      await settle();
+
+      await submit(instance, '/models');
+      await press(instance, '\r'); // the cursor starts on custom: that is where the active model lives
+      await press(instance, 'd');
+
+      const frame = plain(instance.lastFrame() ?? '');
+      expect(frame).toContain('正在使用');
+      expect(frame).not.toContain('y 确认');
+      expect(Object.keys(loadConfig().profiles ?? {})).toEqual(['alpha', 'beta']);
+    });
+
+    test('the legacy slot is refused while the session runs on a custom: spec', async () => {
+      setCustomModel({ baseUrl: 'http://127.0.0.1:1/v1', model: 'old-model' });
+      const instance = mount(undefined, 'custom:old-model');
+      await settle();
+
+      await submit(instance, '/models');
+      await press(instance, '\r'); // starts on custom, like any saved gateway
+      await press(instance, 'd');
+
+      expect(plain(instance.lastFrame() ?? '')).toContain('正在使用');
+      expect(loadConfig().custom).toEqual({ baseUrl: 'http://127.0.0.1:1/v1', model: 'old-model' });
+    });
+
+    test('after a refusal another entry can still be deleted, and the hint goes away', async () => {
+      saveTwo();
+      const instance = mount(undefined, 'alpha');
+      await settle();
+
+      await submit(instance, '/models');
+      await press(instance, '\r');
+      await press(instance, 'd'); // refused: alpha is in use
+      await press(instance, '\x1b[B');
+      await press(instance, 'd'); // beta is not
+
+      const frame = plain(instance.lastFrame() ?? '');
+      expect(frame).toContain('删除 beta');
+      expect(frame).not.toContain('正在使用');
+    });
+
+    test('d on "+ 新建自定义模型…" does nothing, and the row still works', async () => {
+      saveTwo();
+      const instance = mount();
+      await settle();
+
+      await openCustomGateways(instance);
+      await press(instance, '\x1b[B');
+      await press(instance, '\x1b[B');
+      expect(plain(instance.lastFrame() ?? '')).toContain('❯ + 新建自定义模型…'); // the cursor is on the "new" row
+      await press(instance, 'd');
+
+      const frame = plain(instance.lastFrame() ?? '');
+      expect(frame).not.toContain('y 确认');
+      expect(frame).toContain('❯ + 新建自定义模型…');
+      expect(Object.keys(loadConfig().profiles ?? {})).toEqual(['alpha', 'beta']);
+
+      await press(instance, '\r'); // the row still starts a new gateway
+      expect(plain(instance.lastFrame() ?? '')).toContain('baseurl> ');
+    });
+
+    test('the next entry takes the highlighted slot after a removal', async () => {
+      saveCustomProfile({ baseUrl: 'https://a.example/v1', model: 'alpha' });
+      saveCustomProfile({ baseUrl: 'https://b.example/v1', model: 'beta' });
+      saveCustomProfile({ baseUrl: 'https://c.example/v1', model: 'gamma' });
+      const instance = mount();
+      await settle();
+
+      await openCustomGateways(instance);
+      await press(instance, '\x1b[B'); // beta
+      await press(instance, 'd');
+      await press(instance, 'y');
+
+      const frame = plain(instance.lastFrame() ?? '');
+      expect(frame).toContain('❯ gamma'); // gamma moved up into the highlighted slot
+      expect(frame).not.toContain('❯ alpha');
+    });
+
+    test('removing the last entry leaves the cursor on the "new" row', async () => {
+      saveTwo();
+      const instance = mount();
+      await settle();
+
+      await openCustomGateways(instance);
+      await press(instance, '\x1b[B'); // beta, the last entry
+      await press(instance, 'd');
+      await press(instance, 'y');
+
+      const frame = plain(instance.lastFrame() ?? '');
+      expect(frame).toContain('❯ + 新建自定义模型…');
+      expect(frame).not.toContain('beta  https'); // gone from the list
+    });
+
+    test('the list says that entries can be deleted', async () => {
+      saveTwo();
+      const instance = mount();
+      await settle();
+
+      await openCustomGateways(instance);
+
+      expect(plain(instance.lastFrame() ?? '')).toContain('删除');
+    });
+
+    test('a refusal hint does not survive leaving and reopening the list', async () => {
+      saveTwo();
+      const instance = mount(undefined, 'beta');
+      await settle();
+
+      await submit(instance, '/models');
+      await press(instance, '\r');
+      await press(instance, '\x1b[B'); // beta: the list opens on its first entry
+      await press(instance, 'd'); // refused: beta is in use
+      await press(instance, '\x1b'); // back to the vendors
+      await press(instance, '\r'); // custom again: the cursor is back on alpha
+
+      const frame = plain(instance.lastFrame() ?? '');
+      expect(frame).toContain('❯ alpha');
+      expect(frame).not.toContain('正在使用');
     });
   });
 });

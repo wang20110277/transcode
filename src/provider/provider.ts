@@ -561,6 +561,12 @@ export function switchNote(displayName: string, pickedModel: string, served?: st
   return `已切换到 ${displayName}`;
 }
 
+/** History line for a removed custom gateway; names the roles it unassigned, if any. */
+export function deletedGatewayNote(removal: CustomGatewayRemoval): string {
+  const roles = removal.roles.length > 0 ? ` · 已解除角色路由: ${removal.roles.join(', ')}` : '';
+  return `已删除自定义模型 ${removal.model}（${removal.baseUrl}）${roles}`;
+}
+
 // ---- REPL key/model persistence (~/.transcode.json) ----
 
 const keyStore = new Map<string, string>(
@@ -688,6 +694,56 @@ export function saveCustomProfile(custom: { baseUrl: string; model: string }): s
   };
   saveConfig(cfg);
   return name;
+}
+
+/** What removing a saved custom gateway took with it. */
+export interface CustomGatewayRemoval {
+  model: string;
+  baseUrl: string;
+  /** Roles that routed to the entry and are now unassigned. */
+  roles: string[];
+}
+
+/**
+ * Removes a saved custom gateway (a user profile, or the legacy `custom`
+ * slot) together with everything that is only its own: the key stored under
+ * its name, its context budget and the roles routing to it. One config
+ * write. Null when no saved gateway is listed under `spec`.
+ */
+export function deleteCustomGateway(spec: string): CustomGatewayRemoval | null {
+  const entry = listCustomGateways().find(candidate => candidate.spec === spec);
+  if (!entry) return null;
+  const legacy = spec === 'custom';
+  const cfg = loadConfig();
+  if (legacy) delete cfg.custom;
+  const profiles = { ...(cfg.profiles ?? {}) };
+  delete profiles[spec];
+  cfg.profiles = profiles;
+  // The key under the entry's name is its own only while no remaining
+  // profile borrows it (one written by hand may name it as keyId).
+  const keyIsOwn = !Object.values(profiles).some(profile => profile?.keyId === spec);
+  if (keyIsOwn) {
+    cfg.apiKeys = { ...(cfg.apiKeys ?? {}) };
+    delete cfg.apiKeys[spec];
+    keyStore.delete(spec);
+  }
+  // A role left routing to the removed entry would fall through to the
+  // default vendor under the entry's bare name: unassign it instead. The
+  // legacy slot also serves every "custom:MODEL" spec.
+  const routing = cfg.routing ?? {};
+  const routesTo = (target: string): boolean => target === spec || (legacy && target.startsWith('custom:'));
+  const roles = Object.keys(routing).filter(role => routesTo(routing[role]!));
+  if (roles.length > 0) {
+    cfg.routing = Object.fromEntries(Object.entries(routing).filter(([, target]) => !routesTo(target)));
+  }
+  const auto = cfg.autoCompact;
+  if (auto && typeof auto === 'object') {
+    const byModel = { ...(auto.byModel ?? {}) };
+    delete byModel[spec];
+    cfg.autoCompact = { ...auto, byModel };
+  }
+  saveConfig(cfg);
+  return { model: entry.model, baseUrl: entry.baseUrl, roles };
 }
 
 /**

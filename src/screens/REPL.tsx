@@ -20,6 +20,8 @@ import {
   vendorModels,
   verifyModel,
   switchNote,
+  deleteCustomGateway,
+  deletedGatewayNote,
   type CustomGatewayEntry,
   type ModelId,
 } from '../provider/provider.js';
@@ -172,6 +174,10 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
   // address) followed by "+ 新建自定义模型…".
   const [customEntries, setCustomEntries] = useState<CustomGatewayEntry[]>([]);
   const [customCursor, setCustomCursor] = useState(0);
+  // The saved entry waiting for the delete confirmation (y confirms).
+  const [deleteTarget, setDeleteTarget] = useState<CustomGatewayEntry | null>(null);
+  // Why the entry under the cursor cannot be deleted, shown under the list.
+  const [customNotice, setCustomNotice] = useState<string | null>(null);
   // /models budget step: cursor over CONTEXT_BUDGET_CHOICES; the verified
   // switch args wait here while the user picks a context budget.
   const [modelContextCursor, setModelContextCursor] = useState(0);
@@ -1360,7 +1366,9 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       }
       // The custom gateway list is a sub-menu of the vendor list: back one level.
       if (phase === 'custom_list') {
-        setPhase('model_select');
+        // A pending delete question is dismissed first; the next Esc goes back.
+        if (deleteTarget !== null) setDeleteTarget(null);
+        else setPhase('model_select');
         return;
       }
       if (phase !== 'idle') {
@@ -1459,6 +1467,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
           setVendor(null);
           setCustomEntries(listCustomGateways());
           setCustomCursor(0);
+          setCustomNotice(null);
           setPhase('custom_list');
           return;
         }
@@ -1514,6 +1523,37 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
 
     if (phase === 'custom_list') {
       const rows = customEntries.length + 1; // + "新建自定义模型…"
+      if (deleteTarget !== null) {
+        if (ch === 'y' || ch === 'Y') {
+          const target = deleteTarget;
+          setDeleteTarget(null);
+          const removed = deleteCustomGateway(target.spec);
+          if (removed) {
+            addHistory({ input: '', output: deletedGatewayNote(removed) });
+            setCustomEntries(listCustomGateways());
+            dragFlush();
+          }
+        } else {
+          setDeleteTarget(null); // any other key only dismisses the question
+        }
+        return;
+      }
+      // Plain d only: ctrl+d (the usual exit key) must not ask to delete.
+      if (ch === 'd' && !key.ctrl && !key.meta) {
+        const entry = customEntries[customCursor];
+        if (entry) {
+          // Deleting the model the session runs on would swap it mid-conversation.
+          // The legacy slot also backs every "custom:MODEL" spec.
+          const inUse =
+            ctx.modelId === entry.spec || (entry.spec === 'custom' && ctx.modelId.startsWith('custom:'));
+          if (inUse) {
+            setCustomNotice(`${entry.model} 正在使用中，不能删除，请先切换到其它模型`);
+          } else {
+            setDeleteTarget(entry);
+          }
+        }
+        return;
+      }
       if (key.return) {
         const entry = customEntries[customCursor];
         if (entry) {
@@ -1525,12 +1565,9 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
         }
         return;
       }
-      if (key.upArrow) {
-        setCustomCursor(prev => (prev - 1 + rows) % rows);
-        return;
-      }
-      if (key.downArrow) {
-        setCustomCursor(prev => (prev + 1) % rows);
+      if (key.upArrow || key.downArrow) {
+        setCustomCursor(prev => (prev + (key.upArrow ? -1 : 1) + rows) % rows);
+        setCustomNotice(null); // the hint was about the entry just left
         return;
       }
       return;
@@ -1864,7 +1901,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
 
       {phase === 'custom_list' && (
         <Box flexDirection="column" marginLeft={2}>
-          <Text color="gray" dimColor>自定义模型 (↑↓ 选择 · Enter 使用 · Esc 返回)</Text>
+          <Text color="gray" dimColor>自定义模型 (↑↓ 选择 · Enter 使用 · d 删除 · Esc 返回)</Text>
           {customEntries.map((entry, i) => (
             <Box key={entry.spec}>
               <Text color={i === customCursor ? 'cyan' : undefined}>
@@ -1876,6 +1913,10 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
           <Text color={customCursor === customEntries.length ? 'cyan' : 'green'}>
             {customCursor === customEntries.length ? '❯ ' : '  '}+ 新建自定义模型…
           </Text>
+          {deleteTarget && (
+            <Text color="yellow">删除 {deleteTarget.model}（{deleteTarget.baseUrl}）？y 确认 · 其它键取消</Text>
+          )}
+          {customNotice && <Text color="yellow">{customNotice}</Text>}
         </Box>
       )}
 
