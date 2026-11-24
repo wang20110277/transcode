@@ -1754,7 +1754,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
                   <Text>{entry.banner.model}</Text>
                 </Box>
                 <Box>
-                  <Text color="blue">Dir: </Text>
+                  <Text color="red">Dir: </Text>
                   <Text>{entry.banner.dir}</Text>
                 </Box>
                 <Box marginTop={1}>
@@ -1966,7 +1966,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
           <Box>
             <Text color="gray" dimColor>mode: </Text>
             <Text color={MODE_COLOR[permMode]} bold>{permMode}</Text>
-            <Text color="gray" dimColor> · (shift+tab to cycle) · esc to interrupt</Text>
+            <Text color="gray" dimColor> · (shift+tab to cycle) · esc to cancel</Text>
           </Box>
         </Box>
       )}

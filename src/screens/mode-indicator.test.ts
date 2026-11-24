@@ -11,7 +11,7 @@ import REPL from './REPL.js';
  */
 
 const CONFIG_PATH = '/tmp/transcode-mode-indicator-config.json';
-const HINT = ' · (shift+tab to cycle) · esc to interrupt';
+const HINT = ' · (shift+tab to cycle) · esc to cancel';
 
 const mounted: ReturnType<typeof render>[] = [];
 
