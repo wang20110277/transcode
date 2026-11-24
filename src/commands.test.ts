@@ -36,15 +36,18 @@ describe('mode command', () => {
     expect(result.output).toContain('readonly');
   });
 
-  test('/mode auto switches the runtime mode', async () => {
+  test('/mode <x> switches the runtime mode silently (empty output lands nothing in the transcript)', async () => {
     const mode = findCommand('mode')!;
     const ctx = { modelId: 'deepseek', setModelId: () => {}, clearHistory: () => {} };
-    await mode.execute(['auto'], ctx);
+    const first = await mode.execute(['auto'], ctx);
     expect(getPermissionMode()).toBe('auto');
+    expect(first.output).toBe('');
 
     const result = await mode.execute(['readonly'], ctx);
     expect(getPermissionMode()).toBe('readonly');
-    expect(result.output).toContain('readonly');
+    // The REPL only lands a history entry for non-empty output; the mode
+    // indicator under the input box is the sole feedback for a switch.
+    expect(result.output).toBe('');
   });
 
   test('/mode bogus reports the valid modes without switching', async () => {

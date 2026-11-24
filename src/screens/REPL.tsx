@@ -1484,8 +1484,11 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
     // later tab branch (popup completion, slash completion) would misfire.
     if (key.tab && (ch === '[Z' || key.shift) && phase === 'idle') {
       const next = nextPermissionMode(getPermissionMode());
+      // Silent: the mode indicator (subscribed to the permission store) is
+      // the only feedback. Nothing lands in history here, so nudge the
+      // paint on a timer the same way command submission does.
       setPermissionMode(next);
-      addHistory({ input: '', output: `权限模式 → ${next}` });
+      dragFlush();
       return;
     }
 

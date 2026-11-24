@@ -80,6 +80,8 @@ describe('REPL 权限模式角标', () => {
     const frame = plain(instance.lastFrame() ?? '');
     expect(frame).toContain(`mode: auto${HINT}`);
     expect(frame).not.toContain('mode: ask');
+    // The indicator is the only feedback: nothing lands in the transcript.
+    expect(frame).not.toContain('权限模式 →');
   });
 
   test('/mode <x> 切换后角标立即显示新模式', async () => {
@@ -91,6 +93,9 @@ describe('REPL 权限模式角标', () => {
     const frame = plain(instance.lastFrame() ?? '');
     expect(frame).toContain(`mode: readonly${HINT}`);
     expect(frame).not.toContain('mode: ask');
+    // Neither the command echo nor a confirmation lands in the transcript.
+    expect(frame).not.toContain('/mode readonly');
+    expect(frame).not.toContain('Permission mode switched');
   });
 
   test('模式在不触发其它重渲染的路径下切换时,角标照样刷新', async () => {

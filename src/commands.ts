@@ -155,7 +155,9 @@ const commands: Command[] = [
         return { output: `Unknown mode: ${target}. Valid modes: ${PERMISSION_MODES.join(', ')}` };
       }
       setPermissionMode(target as never);
-      return { output: `Permission mode switched to ${target}` };
+      // Silent switch: the REPL's mode indicator is the feedback. An empty
+      // output lands no transcript entry (same contract as /clear).
+      return { output: '' };
     },
   },
   {
