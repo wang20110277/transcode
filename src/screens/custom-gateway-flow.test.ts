@@ -80,13 +80,16 @@ afterEach(async () => {
 });
 
 /** Starts a NewAPI-like gateway and returns its root URL (no /v1). */
-function startGateway(options: { chat?: { status: number; body: string; type: string } } = {}): string {
+function startGateway(
+  options: { chat?: { status: number; body: string; type: string }; models?: string[] } = {},
+): string {
+  const models = options.models ?? ['qwen3.6-35b-fp8'];
   const server = Bun.serve({
     port: 0,
     fetch(request) {
       const { pathname } = new URL(request.url);
       if (pathname === '/v1/models') {
-        return Response.json({ object: 'list', data: [{ id: 'qwen3.6-35b-fp8' }] });
+        return Response.json({ object: 'list', data: models.map(id => ({ id })) });
       }
       if (pathname === '/v1/chat/completions') {
         if (options.chat) {
@@ -270,5 +273,38 @@ describe('custom gateways in /models', () => {
     const byModel = loadConfig().autoCompact?.byModel ?? {};
     expect(byModel['qwen3.6-35b-fp8']).toBe(128_000);
     expect(byModel['custom']).toBeUndefined(); // "custom" is the legacy entry's budget key
+  });
+
+  test('a long model list scrolls with the highlight instead of pushing it off screen', async () => {
+    // 150 names without digits, so the picker's ordering is plain alphabetical:
+    // model-aa first … model-ft last.
+    const many = Array.from({ length: 150 }, (_, i) => {
+      const letter = (n: number) => String.fromCharCode(97 + n);
+      return `model-${letter(Math.floor(i / 26))}${letter(i % 26)}`;
+    });
+    const root = startGateway({ models: many });
+    const instance = mount();
+    await settle();
+
+    await openCustomGateways(instance);
+    await press(instance, '\r');
+    await submit(instance, root);
+    await submit(instance, 'k');
+    await settle();
+
+    // The test terminal is 100 rows tall: the whole frame has to fit in it.
+    const top = plain(instance.lastFrame() ?? '').trimEnd();
+    expect(top.split('\n').length).toBeLessThanOrEqual(100);
+    expect(top).toContain('❯ model-aa'); // the highlighted row is on screen…
+    expect(top).not.toContain('model-ft'); // …and the far end of the list is scrolled out
+    expect(top).toContain('↓ 向下');
+
+    await press(instance, '\x1b[A'); // wraps from the first row to the last: "自定义模型名…"
+
+    const end = plain(instance.lastFrame() ?? '').trimEnd();
+    expect(end).toContain('❯ 自定义模型名…');
+    expect(end).toContain('model-ft');
+    expect(end).not.toContain('❯ model-aa');
+    expect(end).toContain('↑ 向上');
   });
 });

@@ -57,6 +57,7 @@ import { submitSearchApiKey } from './search-setup.js';
 import { reduceQueue, shouldResumeQueue, type QueueAction } from './input-queue.js';
 import { createStreamThrottler } from './stream-throttle.js';
 import { historyRule } from './history-rule.js';
+import { listWindow } from './list-window.js';
 import { renderDiff } from './diff-render.js';
 import { createTurnStats, recordCall, renderCollapsed, renderExpansion, shouldCollapse, summaryLine } from './turn-summary.js';
 import { sliceLiveTail } from './live-view.js';
@@ -1705,6 +1706,12 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
     (stdout?.columns ?? 80) - 2,
   );
 
+  // Model picker: gateways list 300+ models. Draw a window around the cursor
+  // so the highlighted row is always on screen and the frame fits the
+  // terminal (rows - 11 leaves room for the header, the two "… 还有 N 项"
+  // lines, the list note, the hint and the input box).
+  const pickView = listWindow(pickOptions.length + 1, pickCursor, Math.max(5, (stdout?.rows ?? 24) - 11));
+
   const promptLabel = phase === 'model_select'
     ? 'vendor> '
     : phase === 'model_pick'
@@ -1891,20 +1898,31 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
           {pendingModel === null && customBaseDraft && (
             <Text color="gray" dimColor>自定义网关 {customBaseDraft} 的模型：</Text>
           )}
-          {pickOptions.map((name, i) => (
-            <Box key={name}>
-              <Text color={i === pickCursor ? 'cyan' : undefined}>
-                {i === pickCursor ? '❯ ' : '  '}
-                {name}
+          {pickView.before > 0 && (
+            <Text color="gray" dimColor>… 还有 {pickView.before} 项（↑ 向上）</Text>
+          )}
+          {pickOptions.slice(pickView.start, pickView.end).map((name, offset) => {
+            const i = pickView.start + offset;
+            return (
+              <Box key={i}>
+                <Text color={i === pickCursor ? 'cyan' : undefined}>
+                  {i === pickCursor ? '❯ ' : '  '}
+                  {name}
+                </Text>
+              </Box>
+            );
+          })}
+          {pickView.end > pickOptions.length && (
+            <Box>
+              <Text color={pickCursor === pickOptions.length ? 'cyan' : 'gray'}>
+                {pickCursor === pickOptions.length ? '❯ ' : '  '}
+                自定义模型名…
               </Text>
             </Box>
-          ))}
-          <Box>
-            <Text color={pickCursor === pickOptions.length ? 'cyan' : 'gray'}>
-              {pickCursor === pickOptions.length ? '❯ ' : '  '}
-              自定义模型名…
-            </Text>
-          </Box>
+          )}
+          {pickView.after > 0 && (
+            <Text color="gray" dimColor>… 还有 {pickView.after} 项（↓ 向下）</Text>
+          )}
           {pickLoading && <Text color="gray" dimColor>… 正在从网关获取实时模型列表</Text>}
           {!pickLoading && pickLive && <Text color="gray" dimColor>（网关实时列表）</Text>}
           {!pickLoading && !pickLive && (
