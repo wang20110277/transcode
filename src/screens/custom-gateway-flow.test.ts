@@ -136,6 +136,20 @@ async function press(instance: Instance, key: string): Promise<void> {
   await settle();
 }
 
+/** Types text without pressing Enter (what a search query looks like to the picker). */
+async function typeText(instance: Instance, text: string): Promise<void> {
+  for (const ch of text) instance.stdin.write(ch);
+  await settle();
+}
+
+/** 150 names without digits, so the picker's ordering is plain alphabetical: model-aa … model-ft. */
+function manyModels(): string[] {
+  return Array.from({ length: 150 }, (_, i) => {
+    const letter = (n: number) => String.fromCharCode(97 + n);
+    return `model-${letter(Math.floor(i / 26))}${letter(i % 26)}`;
+  });
+}
+
 /** Types text, waits for the handlers to see it, then presses Enter and waits again. */
 async function submit(instance: Instance, text: string): Promise<void> {
   for (const ch of text) instance.stdin.write(ch);
@@ -281,13 +295,7 @@ describe('custom gateways in /models', () => {
   });
 
   test('a long model list scrolls with the highlight instead of pushing it off screen', async () => {
-    // 150 names without digits, so the picker's ordering is plain alphabetical:
-    // model-aa first … model-ft last.
-    const many = Array.from({ length: 150 }, (_, i) => {
-      const letter = (n: number) => String.fromCharCode(97 + n);
-      return `model-${letter(Math.floor(i / 26))}${letter(i % 26)}`;
-    });
-    const root = startGateway({ models: many });
+    const root = startGateway({ models: manyModels() });
     const instance = mount();
     await settle();
 
@@ -348,6 +356,67 @@ describe('custom gateways in /models', () => {
       await createEntry(instance, root);
 
       expect(plain(instance.lastFrame() ?? '')).toContain('实际生效 renamed-upstream');
+    });
+  });
+
+  describe('searching the model list', () => {
+    /** Opens the custom-gateway picker for a gateway listing `models`, live list loaded. */
+    async function openPicker(instance: Instance, models: string[]): Promise<void> {
+      const root = startGateway({ models });
+      await openCustomGateways(instance);
+      await press(instance, '\r'); // + 新建自定义模型…
+      await submit(instance, root);
+      await submit(instance, 'k');
+      await settle();
+    }
+
+    test('typing narrows a long list to the matches, best ones first, within one screen', async () => {
+      const instance = mount();
+      await settle();
+      await openPicker(instance, [...manyModels(), 'ft-anchor', 'zzz']);
+
+      await typeText(instance, 'ft');
+
+      const frame = plain(instance.lastFrame() ?? '').trimEnd();
+      expect(frame).toContain('搜索');
+      expect(frame).toContain('ft-anchor');
+      expect(frame).toContain('model-ft');
+      expect(frame).not.toContain('model-aa'); // non-matches are gone
+      expect(frame).not.toContain('zzz');
+      // "ft-anchor" starts with the query, so it ranks above "model-ft".
+      expect(frame.indexOf('ft-anchor')).toBeLessThan(frame.indexOf('model-ft'));
+      expect(frame.split('\n').length).toBeLessThanOrEqual(100); // still fits the terminal
+    });
+
+    test('a query without matches says so, and Enter offers the typed text as a model name', async () => {
+      const instance = mount();
+      await settle();
+      await openPicker(instance, manyModels());
+
+      await typeText(instance, 'zzz');
+      expect(plain(instance.lastFrame() ?? '')).toContain('没有匹配的模型');
+
+      await press(instance, '\r'); // "自定义模型名…"
+      expect(plain(instance.lastFrame() ?? '')).toContain('自定义模型名> zzz');
+    });
+
+    test('Esc clears the search first and leaves the picker only when pressed again', async () => {
+      const instance = mount();
+      await settle();
+      await openPicker(instance, manyModels());
+
+      await typeText(instance, 'ft');
+      await press(instance, '\x1b'); // clear the search
+
+      let frame = plain(instance.lastFrame() ?? '');
+      expect(frame).toContain('↑↓ 选择模型'); // still in the picker…
+      expect(frame).toContain('model-aa'); // …with the full list back
+      expect(frame).not.toContain('搜索');
+
+      await press(instance, '\x1b'); // now leave it
+      frame = plain(instance.lastFrame() ?? '');
+      expect(frame).not.toContain('↑↓ 选择模型');
+      expect(frame).toContain('Cancelled.');
     });
   });
 });

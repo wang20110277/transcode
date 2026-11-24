@@ -59,6 +59,7 @@ import { reduceQueue, shouldResumeQueue, type QueueAction } from './input-queue.
 import { createStreamThrottler } from './stream-throttle.js';
 import { historyRule } from './history-rule.js';
 import { listWindow } from './list-window.js';
+import { fuzzyFilter } from './fuzzy-filter.js';
 import { quietLibraryNoise } from '../provider/library-noise.js';
 import { renderDiff } from './diff-render.js';
 import { createTurnStats, recordCall, renderCollapsed, renderExpansion, shouldCollapse, summaryLine } from './turn-summary.js';
@@ -329,6 +330,13 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
     setSlashCursor(0);
     if (slashPrefix === null) setSlashDismissed(false);
   }, [slashPrefix]);
+
+  // Model picker search: what is typed in the picker narrows the list
+  // (gateways list 300+ models).
+  const pickMatches = useMemo(
+    () => fuzzyFilter(pickOptions, input, name => name),
+    [pickOptions, input],
+  );
 
   // Background auto-update outcome: surface as a history banner once settled.
   useEffect(() => {
@@ -1322,6 +1330,12 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       setSlashDismissed(true);
       return;
     }
+    // Model picker: Esc clears the search before it leaves the picker.
+    if (key.escape && phase === 'model_pick' && input) {
+      commitInput('');
+      setPickCursor(0);
+      return;
+    }
     if (key.escape) {
       // Budget menu / custom input: Esc = SKIP (keep current budget) and
       // still apply the verified model switch — the generic phase cancel
@@ -1545,14 +1559,15 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
     }
 
     if (phase === 'model_pick') {
-      const total = pickOptions.length + 1; // + "自定义模型名…"
+      const total = pickMatches.length + 1; // matches of the search + "自定义模型名…"
+      const pickRow = Math.min(pickCursor, pickMatches.length); // the list may have shrunk under the cursor
       if (key.return) {
-        if (pickCursor >= pickOptions.length) {
+        if (pickRow >= pickMatches.length) {
+          // "自定义模型名…": what was typed carries over as the name draft.
           setPhase('model_name');
-          commitInput('');
           return;
         }
-        const modelName = pickOptions[pickCursor]!;
+        const modelName = pickMatches[pickRow]!;
         if (pendingModel === null && customBaseDraft) {
           // Custom gateway: model chosen from the live list.
           void finalizeSelection('custom', `custom/${modelName}`, customKeyDraft, {
@@ -1574,14 +1589,15 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
         return;
       }
       if (key.upArrow) {
-        setPickCursor(prev => (prev - 1 + total) % total);
+        setPickCursor((pickRow - 1 + total) % total);
         return;
       }
       if (key.downArrow) {
-        setPickCursor(prev => (prev + 1) % total);
+        setPickCursor((pickRow + 1) % total);
         return;
       }
-      return;
+      // Anything else (search characters, Backspace) falls through to the
+      // shared input handling below: what is typed filters this list.
     }
 
     // Shift+Tab cycles permission modes (ask → auto → readonly). Runs FIRST:
@@ -1717,9 +1733,11 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
 
   // Model picker: gateways list 300+ models. Draw a window around the cursor
   // so the highlighted row is always on screen and the frame fits the
-  // terminal (rows - 11 leaves room for the header, the two "… 还有 N 项"
-  // lines, the list note, the hint and the input box).
-  const pickView = listWindow(pickOptions.length + 1, pickCursor, Math.max(5, (stdout?.rows ?? 24) - 11));
+  // terminal (rows - 12 leaves room for the header, the search line, the two
+  // "… 还有 N 项" lines, the list note, the hint and the input box). The
+  // list may have shrunk under the cursor while a search was typed.
+  const pickRow = Math.min(pickCursor, pickMatches.length);
+  const pickView = listWindow(pickMatches.length + 1, pickRow, Math.max(5, (stdout?.rows ?? 24) - 12));
 
   const promptLabel = phase === 'model_select'
     ? 'vendor> '
@@ -1907,24 +1925,31 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
           {pendingModel === null && customBaseDraft && (
             <Text color="gray" dimColor>自定义网关 {customBaseDraft} 的模型：</Text>
           )}
+          {input && (
+            <Text color="gray" dimColor>
+              {pickMatches.length > 0
+                ? `搜索「${input}」：${pickMatches.length} / ${pickOptions.length} 个模型`
+                : `搜索「${input}」：没有匹配的模型 — 回车将输入内容作为模型名`}
+            </Text>
+          )}
           {pickView.before > 0 && (
             <Text color="gray" dimColor>… 还有 {pickView.before} 项（↑ 向上）</Text>
           )}
-          {pickOptions.slice(pickView.start, pickView.end).map((name, offset) => {
+          {pickMatches.slice(pickView.start, pickView.end).map((name, offset) => {
             const i = pickView.start + offset;
             return (
-              <Box key={i}>
-                <Text color={i === pickCursor ? 'cyan' : undefined}>
-                  {i === pickCursor ? '❯ ' : '  '}
+              <Box key={name}>
+                <Text color={i === pickRow ? 'cyan' : undefined}>
+                  {i === pickRow ? '❯ ' : '  '}
                   {name}
                 </Text>
               </Box>
             );
           })}
-          {pickView.end > pickOptions.length && (
+          {pickView.end > pickMatches.length && (
             <Box>
-              <Text color={pickCursor === pickOptions.length ? 'cyan' : 'gray'}>
-                {pickCursor === pickOptions.length ? '❯ ' : '  '}
+              <Text color={pickRow === pickMatches.length ? 'cyan' : 'gray'}>
+                {pickRow === pickMatches.length ? '❯ ' : '  '}
                 自定义模型名…
               </Text>
             </Box>
@@ -1937,7 +1962,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
           {!pickLoading && !pickLive && (
             <Text color="gray" dimColor>（本地列表 · 保存 key 后显示线上实时列表）</Text>
           )}
-          <Text color="gray" dimColor>↑↓ 选择模型 · Enter 确认</Text>
+          <Text color="gray" dimColor>↑↓ 选择模型 · Enter 确认 · 直接输入可筛选</Text>
         </Box>
       )}
 
