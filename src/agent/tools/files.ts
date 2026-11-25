@@ -54,7 +54,6 @@ function normalizeQuotes(str: string): string {
 /**
  * Finds the actual string in the file content matching the search string,
  * falling back to quote normalization when the exact match fails.
- * Ported from Claude Code's FileEditTool findActualString.
  */
 function findActualString(fileContent: string, searchString: string): string | null {
   if (fileContent.includes(searchString)) {

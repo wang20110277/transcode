@@ -270,7 +270,7 @@ const MALFORMED_GUIDANCE =
   'bash heredoc for large content, or reply describing what you are stuck on.';
 
 /**
- * Auto-compaction (Claude Code's autoCompact, ported): when the estimated
+ * Auto-compaction: when the estimated
  * conversation size exceeds the char budget, summarize the history with the
  * same model and keep the summary plus a short recent tail. Tool messages
  * at the tail head are dropped so providers never see orphaned tool calls.

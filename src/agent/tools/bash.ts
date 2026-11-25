@@ -22,7 +22,7 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-/** Git Bash probe locations for Windows (Claude Code's list). */
+/** Git Bash probe locations for Windows. */
 const GIT_BASH_CANDIDATES = [
   'C:\\Program Files\\Git\\bin\\bash.exe',
   'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
@@ -85,7 +85,6 @@ function rcFileFor(shell: string): string {
 /**
  * Builds the script that captures the user's interactive shell state
  * (functions, shell options, aliases) into a re-sourceable snapshot file.
- * Ported from Claude Code's ShellSnapshot.getUserSnapshotContent.
  */
 function snapshotScript(shell: string, snapshotPath: string, rcFile: string, rcExists: boolean): string {
   const zsh = isZsh(shell);

@@ -5,7 +5,7 @@
  * the raw command contains no unquoted redirection/substitution/heredoc.
  *
  * Conservative by design: anything unparsed or unusual fails closed (asks
- * for permission). Inspired by Claude Code's readOnlyValidation.
+ * for permission).
  */
 
 const SAFE_COMMANDS = new Set([
