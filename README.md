@@ -347,6 +347,6 @@ src/
   upgrade.ts       transcode upgrade 与自动更新
   cli.ts           命令行入口分发
   main.tsx         REPL 入口
-docs/              ACP.md 与设计文档（docs/superpowers/）
+docs/              ACP.md、迭代路线 roadmap.md 与设计文档（docs/superpowers/）
 scripts/           构建、版本同步与 ACP 冒烟脚本
 ```
