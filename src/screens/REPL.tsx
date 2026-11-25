@@ -16,6 +16,7 @@ import {
   isCustomModelSpec,
   listCustomGateways,
   customProfileName,
+  modelLabel,
   vendorModelSpec,
   vendorModels,
   verifyModel,
@@ -81,7 +82,10 @@ interface HistoryEntry {
   output: string;
   /** Tool-log detail hidden behind the collapse summary (ctrl+o reveals). */
   hiddenLines?: string[];
-  /** Set on the startup banner entry; the static renderer styles it. */
+  /**
+   * Header block printed with the entry, under its text: the startup banner
+   * (first entry) and the entry that lands a model switch.
+   */
   banner?: BannerData;
 }
 
@@ -837,6 +841,9 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       addHistory({
         input: '••••••••',
         output: `${checkMessage} — ${switchNote(label, pickedModel, served)}`,
+        // A printed header cannot change in place (Static prints each entry
+        // once), so the switch prints it again for the model now in use.
+        banner: banner ? { ...banner, model: modelLabel(target) } : undefined,
       });
       setPendingSpec(null);
       setPendingDisplayName('');
@@ -848,7 +855,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       setPhase('idle');
       dragFlush();
     },
-    [ctx, addHistory, dragFlush],
+    [ctx, addHistory, dragFlush, banner],
   );
 
   /**
@@ -1794,6 +1801,21 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       <Static items={chat.history}>
         {(entry, i) => (
           <Box key={i} flexDirection="column">
+            {entry.input && (
+              <Box flexDirection="column">
+                <Text color="gray" dimColor>{historyRule(stdout?.columns ?? 80)}</Text>
+                <Box>
+                  <Text color="green" bold>&gt; </Text>
+                  <Text color="cyan" bold>{entry.input}</Text>
+                </Box>
+                <Text color="gray" dimColor>{historyRule(stdout?.columns ?? 80)}</Text>
+              </Box>
+            )}
+            {entry.output && (
+              <Box marginLeft={2}>
+                <Text>{entry.output}</Text>
+              </Box>
+            )}
             {entry.banner ? (
               <Box flexDirection="column" marginBottom={1}>
                 <Text color="cyan" bold>{entry.banner.logo}</Text>
@@ -1814,21 +1836,6 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
                 </Box>
               </Box>
             ) : null}
-            {entry.input && (
-              <Box flexDirection="column">
-                <Text color="gray" dimColor>{historyRule(stdout?.columns ?? 80)}</Text>
-                <Box>
-                  <Text color="green" bold>&gt; </Text>
-                  <Text color="cyan" bold>{entry.input}</Text>
-                </Box>
-                <Text color="gray" dimColor>{historyRule(stdout?.columns ?? 80)}</Text>
-              </Box>
-            )}
-            {entry.output && (
-              <Box marginLeft={2}>
-                <Text>{entry.output}</Text>
-              </Box>
-            )}
           </Box>
         )}
       </Static>

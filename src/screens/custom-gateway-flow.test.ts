@@ -634,4 +634,27 @@ describe('custom gateways in /models', () => {
       expect(frame).not.toContain('正在使用');
     });
   });
+
+  describe('the header after a model switch', () => {
+    test('is printed again under the switch line, for the model switched to', async () => {
+      const root = startGateway();
+      registerApiKey(saveCustomProfile({ baseUrl: `${root}/v1`, model: 'alpha' }), 'k');
+      const instance = mount();
+      await settle();
+
+      await openCustomGateways(instance);
+      await press(instance, '\r'); // the saved entry → its key prompt
+      await press(instance, '\r'); // reuse the key → connectivity check → budget picker
+      await settle();
+      await press(instance, '\r'); // default budget → the switch is applied
+
+      const frame = plain(instance.lastFrame() ?? '');
+      expect(frame).toContain('已切换到 alpha');
+      // The startup header is printed once and cannot change in place (Static):
+      // the switch prints it again, so the header in view names the model in use.
+      const headers = [...frame.matchAll(/Model: (\S+)/g)].map(match => match[1]);
+      expect(headers).toEqual(['stub', 'alpha']);
+      expect(frame.indexOf('Model: alpha')).toBeGreaterThan(frame.indexOf('已切换到 alpha'));
+    });
+  });
 });

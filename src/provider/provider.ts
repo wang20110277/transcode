@@ -177,6 +177,14 @@ export function getAvailableModels(): { id: ModelId; name: string }[] {
   }));
 }
 
+/**
+ * The header's "Model:" line: a registry id reads as its name (opus →
+ * "Claude Opus"); a vendor:model spec or a saved gateway's name is shown as is.
+ */
+export function modelLabel(id: string): string {
+  return getAvailableModels().find(m => m.id === id)?.name ?? id;
+}
+
 export function getModelConfig(id: ModelId): ModelConfig {
   return MODEL_REGISTRY[id];
 }

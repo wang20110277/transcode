@@ -15,6 +15,7 @@ import {
   verifyModel,
   switchNote,
   deletedGatewayNote,
+  modelLabel,
 } from './provider.js';
 
 let configDir: string;
@@ -150,6 +151,20 @@ describe('switchNote', () => {
     expect(switchNote('glmc/glm-4.6', 'glm-4.6', 'glm-5.3-flash')).toBe(
       '已切换到 glmc/glm-4.6（实际生效 glm-5.3-flash）',
     );
+  });
+});
+
+describe('modelLabel', () => {
+  test('a registry id reads as its name', () => {
+    expect(modelLabel('deepseek')).toBe('DeepSeek');
+  });
+
+  test('a vendor:model spec is shown as is', () => {
+    expect(modelLabel('glmc:glm-5.4')).toBe('glmc:glm-5.4');
+  });
+
+  test('a saved gateway is shown under its own name', () => {
+    expect(modelLabel('alpha')).toBe('alpha');
   });
 });
 

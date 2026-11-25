@@ -1,6 +1,6 @@
 import { render, Box, Text } from 'ink';
 import { useState } from 'react';
-import { envModelLabel, getAvailableModels, preferredModelId } from './provider/provider.js';
+import { envModelLabel, modelLabel, preferredModelId } from './provider/provider.js';
 import { type CommandContext } from './commands.js';
 import REPL from './screens/REPL.js';
 import { bannerLines } from './screens/banner.js';
@@ -11,11 +11,9 @@ const DEFAULT_MODEL: string = preferredModelId() ?? 'opus';
 
 /** Startup banner data; printed once as the first Static entry (styled). */
 function bannerData(modelId: string, cwd: string, envLabel?: string) {
-  const models = getAvailableModels();
-  const current = models.find(m => m.id === modelId);
   return {
     logo: bannerLines('T R A N S C O D E  ·  Multi-Model Agent'),
-    model: envLabel ?? current?.name ?? modelId,
+    model: envLabel ?? modelLabel(modelId),
     dir: cwd,
   };
 }
