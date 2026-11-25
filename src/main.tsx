@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { envModelLabel, modelLabel, preferredModelId } from './provider/provider.js';
 import { type CommandContext } from './commands.js';
 import REPL from './screens/REPL.js';
-import { bannerLines } from './screens/banner.js';
+import { BANNER_TITLE, bannerLines } from './screens/banner.js';
 import { createKeyedStdin } from './tui/keyed-stdin.js';
 import { autoUpdateNotice } from './upgrade.js';
 import { VERSION } from './version.js';
@@ -12,7 +12,7 @@ const DEFAULT_MODEL: string = preferredModelId() ?? 'opus';
 /** Startup banner data; printed once as the first Static entry (styled). */
 function bannerData(modelId: string, cwd: string, envLabel?: string) {
   return {
-    logo: bannerLines('T R A N S C O D E  ·  Multi-Model Agent'),
+    logo: bannerLines(BANNER_TITLE),
     model: envLabel ?? modelLabel(modelId),
     dir: cwd,
   };
