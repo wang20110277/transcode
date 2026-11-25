@@ -72,16 +72,18 @@ describe('REPL 权限模式角标', () => {
     expect(indent(lines[indicatorRow]!)).toBe(indent(lines[promptRow]!));
   });
 
-  test('Shift+Tab 切换后角标立即显示新模式', async () => {
+  test('Shift+Tab 按顺序循环角标:ask → readonly → plan → auto → ask(先问、再读、再计划、执行)', async () => {
     const instance = mount();
     await settle();
-    instance.stdin.write('\x1b[Z');
-    await settle();
-    const frame = plain(instance.lastFrame() ?? '');
-    expect(frame).toContain(`mode: auto${HINT}`);
-    expect(frame).not.toContain('mode: ask');
+    const shown: string[] = [];
+    for (let press = 0; press < 4; press++) {
+      instance.stdin.write('\x1b[Z');
+      await settle();
+      shown.push(plain(instance.lastFrame() ?? '').match(/mode: (\w+) · \(shift\+tab to cycle\)/)?.[1] ?? '(no indicator)');
+    }
+    expect(shown).toEqual(['readonly', 'plan', 'auto', 'ask']);
     // The indicator is the only feedback: nothing lands in the transcript.
-    expect(frame).not.toContain('权限模式 →');
+    expect(plain(instance.lastFrame() ?? '')).not.toContain('权限模式 →');
   });
 
   test('/mode <x> 切换后角标立即显示新模式', async () => {

@@ -105,7 +105,7 @@ bun run test:acp:real        # 完整 ACP + 工具调用（会创建临时 works
 | --- | --- |
 | `TRANSCODE_MODEL` | 默认模型。注册表 id、档案名、`provider:model`，或裸模型名 |
 | `TRANSCODE_DEFAULT_PROVIDER` | 裸模型名走哪个 provider，默认 `openai` |
-| `TRANSCODE_PERMISSION_MODE` | `ask`（默认） / `auto` / `readonly`；REPL 里可用 `/mode` 或 Shift+Tab 运行时切换，当前模式常驻显示在输入框左下角（`mode: ask · (shift+tab to cycle) · esc to cancel`） |
+| `TRANSCODE_PERMISSION_MODE` | `ask`（默认） / `readonly` / `plan` / `auto`；REPL 里可用 `/mode` 或 Shift+Tab 运行时切换（循环顺序 ask → readonly → plan → auto），当前模式常驻显示在输入框左下角（`mode: ask · (shift+tab to cycle) · esc to cancel`） |
 | `TRANSCODE_ALLOW_OUTSIDE_CWD` | 设为 `1` 才允许读写工作区之外的路径 |
 | `TRANSCODE_BASE_URL` | 覆盖当前模型的 base URL（所有 provider） |
 | `TRANSCODE_MAX_TOKENS` | 单次回复的 `max_tokens`，默认 `8192` |
@@ -197,7 +197,7 @@ export DEEPSEEK_API_KEY=...
 multica daemon restart
 ```
 
-ACP 默认权限模式是 `ask`：写文件、改文件、执行命令前会向客户端发 `session/request_permission`。multica 会自动选择 `allow_once`。如果你在别的 headless 客户端里使用，可以设 `TRANSCODE_PERMISSION_MODE=auto`；设为 `readonly` 则只允许读/搜索。
+ACP 默认权限模式是 `ask`：写文件、改文件、执行命令前会向客户端发 `session/request_permission`。multica 会自动选择 `allow_once`。如果你在别的 headless 客户端里使用，可以设 `TRANSCODE_PERMISSION_MODE=auto`；设为 `readonly` 则只允许读/搜索；设为 `plan` 则只读，并让 Agent 以实施方案（`PLAN READY`）收尾。
 
 ## 工具
 
@@ -236,7 +236,7 @@ ACP 默认权限模式是 `ask`：写文件、改文件、执行命令前会向�
 
 ## 方案先行
 
-`/plan <任务描述>` 进入只读探索模式：变更类工具全部被拒并引导模型产出**编号实施方案**（以 `PLAN READY` 结束），你确认方案后再让它执行 —— 探索和动手分离，防止一上来就改错。
+`plan` 是一个权限模式：`/mode plan` 或按 Shift+Tab 切过去（循环顺序 ask → readonly → plan → auto）。该模式下变更类工具全部被拒，Agent 被引导先只读探索、再产出**编号实施方案**（以 `PLAN READY` 结束）；提问照常回答，模式一直保留到你切走为止。方案出来后会提示下一步：按 Shift+Tab 切到 `auto`，或输入 `/mode ask` 保留逐次确认，然后回复“执行” —— 探索和动手分离，防止一上来就改错。
 
 ## 上下文
 

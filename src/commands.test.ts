@@ -28,12 +28,13 @@ describe('mode command', () => {
     expect(mode).toBeDefined();
   });
 
-  test('bare /mode shows the current mode and usage', async () => {
+  test('bare /mode names every mode and says what plan does', async () => {
     const mode = findCommand('mode')!;
     const result = await mode.execute([], { modelId: 'deepseek', setModelId: () => {}, clearHistory: () => {} });
-    expect(result.output).toContain('ask');
-    expect(result.output).toContain('auto');
-    expect(result.output).toContain('readonly');
+    for (const name of ['ask', 'readonly', 'plan', 'auto']) expect(result.output).toContain(name);
+    expect(result.output).toMatch(/plan[^,]*implementation plan/);
+    // /help prints the description: plan belongs in the list there too.
+    expect(mode.description).toContain('plan');
   });
 
   test('/mode <x> switches the runtime mode silently (empty output lands nothing in the transcript)', async () => {

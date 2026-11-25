@@ -35,6 +35,7 @@ import {
 } from '../provider/web-search.js';
 import { VERSION } from '../version.js';
 import { runAgentLoop, type PermissionRequest } from '../agent/loop.js';
+import { withPlanMode } from '../agent/system-prompt.js';
 import { createToolSession } from '../agent/tools/index.js';
 import { getPermissionMode, nextPermissionMode, setPermissionMode, subscribePermissionMode, type PermissionMode } from '../agent/permission.js';
 import {
@@ -109,7 +110,7 @@ const SEARCH_PROVIDERS: WebSearchConfig['provider'][] = ['tavily', 'brave'];
  * Mode indicator (bottom-left, under the input box): color of the mode name —
  * green prompts before mutating tools, red prompts for nothing, blue denies them.
  */
-const MODE_COLOR: Record<PermissionMode, string> = { ask: 'green', auto: 'red', readonly: 'blue' };
+const MODE_COLOR: Record<PermissionMode, string> = { ask: 'green', readonly: 'blue', plan: 'magenta', auto: 'red' };
 
 interface REPLProps {
   ctx: CommandContext;
@@ -586,7 +587,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
   };
 
   const runChat = useCallback(
-    async (text: string, display?: string, options?: { planMode?: boolean }) => {
+    async (text: string, display?: string) => {
       setBusyBoth(true);
       const controller = new AbortController();
       abortRef.current = controller;
@@ -594,9 +595,8 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       // No host entry: the input echo lives in the live region and the whole
       // turn lands in <Static> as one immutable entry when it ends.
       beginTurnLive(display ?? text);
-      if (options?.planMode) {
-        streamAppend('［plan 模式：只读探索，产出方案，PLAN READY 后可让我执行］\n');
-      }
+      // Fixed for the turn: the mode may be switched while the agent runs.
+      const planMode = getPermissionMode() === 'plan';
 
       let endedNaturally = false;
       let turnHiddenLines: string[] | undefined;
@@ -607,10 +607,14 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
             : createModel(ctx.modelId);
 
         const projectContext = await loadProjectContext(process.cwd());
-        const systemPrompt = buildSystemPrompt(
+        const basePrompt = buildSystemPrompt(
           projectContext,
           provider ? { modelName: provider.config.name } : undefined,
         );
+        // The loop keeps whatever system message leads the history, so the
+        // turn's variant (plan mode appends its instruction) must be the one
+        // placed here. It is rebuilt every turn, so it follows mode switches.
+        const systemPrompt = planMode ? withPlanMode(basePrompt) : basePrompt;
         if (messagesRef.current[0]?.getType() === 'system') {
           messagesRef.current[0] = new SystemMessage(systemPrompt);
         } else {
@@ -640,10 +644,8 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
           model: provider?.model,
           cwd: process.cwd(),
           messages: loopMessages,
-          systemPrompt: options?.planMode
-            ? `${systemPrompt}\n\nPLAN MODE: explore read-only, then output a numbered implementation plan with exact files and changes. End with the line PLAN READY. Do not modify anything.`
-            : systemPrompt,
-          planMode: options?.planMode === true,
+          systemPrompt,
+          planMode,
           ...(turnBudget.enabled && turnBudget.tokens > 0
             ? { contextTokens: turnBudget.tokens }
             : {}),
@@ -685,6 +687,12 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
           },
           requestPermission: request => askInTerminal(request, controller.signal),
         });
+
+        // A finished plan is only useful once the session can act again: in
+        // plan mode the next shift+tab lands on auto, /mode ask keeps prompts.
+        if (planMode && turnAssistantText.includes('PLAN READY')) {
+          streamAppend('\n（方案已就绪：shift+tab 切到 auto 或输入 /mode ask，然后回复“执行”）');
+        }
 
         // Collapse long turns into one summary line; short turns stay expanded.
         // Collapsed detail is kept (hiddenLines) so ctrl+o can reveal it.
@@ -1234,21 +1242,6 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       return;
     }
 
-    if (cmdName === 'plan') {
-      const task = stripped.startsWith('/plan') ? stripped.slice(5).trim() : stripped;
-      if (!task) {
-        addHistory({ input: trimmed, output: '用法：/plan <任务描述> — 只读探索并产出实施方案（PLAN READY），确认后再执行' });
-        dragFlush();
-        commitInput('');
-        return;
-      }
-      commitInput('');
-      setHistoryIndex(-1);
-      setSavedInput('');
-      await runChat(task, trimmed, { planMode: true });
-      return;
-    }
-
     if (cmdName === 'init') {
       commitInput('');
       setHistoryIndex(-1);
@@ -1637,7 +1630,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       // shared input handling below: what is typed filters this list.
     }
 
-    // Shift+Tab cycles permission modes (ask → auto → readonly). Runs FIRST:
+    // Shift+Tab cycles permission modes (ask → readonly → plan → auto). Runs FIRST:
     // ink reports shift+tab as a bare {tab} key (raw input '[Z'), so every
     // later tab branch (popup completion, slash completion) would misfire.
     if (key.tab && (ch === '[Z' || key.shift) && phase === 'idle') {

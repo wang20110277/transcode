@@ -10,7 +10,7 @@ import { createModel, getAvailableModels, resolveModel } from '../provider/provi
 import { runAgentLoop, type AgentEvent, type PermissionRequest } from '../agent/loop.js';
 import { createToolSession, type ToolSession } from '../agent/tools/index.js';
 import { getPermissionMode } from '../agent/permission.js';
-import { buildSystemPrompt, loadProjectContext } from '../agent/system-prompt.js';
+import { buildSystemPrompt, loadProjectContext, withPlanMode } from '../agent/system-prompt.js';
 import { resolveContextTokens } from '../sessions/compact.js';
 import {
   RPC_ERRORS,
@@ -67,10 +67,6 @@ function promptText(prompt: AcpPromptBlock[]): string {
     .trim();
 }
 
-function permissionMode(): 'ask' | 'auto' | 'readonly' {
-  return getPermissionMode();
-}
-
 export class AcpSession {
   readonly id = `ses_${randomUUID()}`;
   readonly messages: BaseMessage[] = [];
@@ -123,9 +119,15 @@ export class AcpSession {
     try {
       const provider =
         process.env.TRANSCODE_MOCK === '1' ? undefined : createModel(this.modelSpec);
-      const systemPrompt = buildSystemPrompt(await loadProjectContext(this.cwd), {
+      // Fixed for the turn: the mode could change while the agent runs.
+      const planMode = getPermissionMode() === 'plan';
+      const basePrompt = buildSystemPrompt(await loadProjectContext(this.cwd), {
         modelName: provider?.config.name,
       });
+      // The loop keeps whatever system message leads the history, so the
+      // turn's variant (plan mode appends its instruction) is the one placed
+      // here. It is rebuilt every prompt, so it follows mode changes.
+      const systemPrompt = planMode ? withPlanMode(basePrompt) : basePrompt;
       if (this.messages[0]?.getType() === 'system') {
         this.messages[0] = new SystemMessage(systemPrompt);
       } else {
@@ -140,6 +142,7 @@ export class AcpSession {
         cwd: this.cwd,
         messages: this.messages,
         systemPrompt,
+        planMode,
         ...(budget.enabled && budget.tokens > 0 ? { contextTokens: budget.tokens } : {}),
         signal,
         toolSession: this.toolSession,
@@ -243,7 +246,7 @@ export class AcpSession {
     request: PermissionRequest,
     signal: AbortSignal,
   ): Promise<boolean> {
-    const mode = permissionMode();
+    const mode = getPermissionMode();
 
     if (mode === 'auto') return true;
     if (mode === 'readonly') return false;

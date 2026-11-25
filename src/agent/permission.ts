@@ -3,12 +3,15 @@
  * Initialized from TRANSCODE_PERMISSION_MODE; switchable at runtime via /mode.
  *
  * - ask:      mutating tools prompt (read-only bash commands pass silently)
- * - auto:     everything is allowed without prompting
  * - readonly: mutating tools are denied; read-only commands still run
+ * - plan:     read-only like readonly, and the agent is told to finish with a
+ *             numbered implementation plan instead of changing anything
+ * - auto:     everything is allowed without prompting
  */
-export type PermissionMode = 'ask' | 'auto' | 'readonly';
+export type PermissionMode = 'ask' | 'auto' | 'readonly' | 'plan';
 
-export const PERMISSION_MODES: readonly PermissionMode[] = ['ask', 'auto', 'readonly'];
+/** In shift+tab order: ask, read, plan, then execute. */
+export const PERMISSION_MODES: readonly PermissionMode[] = ['ask', 'readonly', 'plan', 'auto'];
 
 function parseMode(value: string | undefined): PermissionMode {
   const lower = value?.toLowerCase();
@@ -37,7 +40,7 @@ export function getPermissionMode(): PermissionMode {
   return currentMode;
 }
 
-/** Shift+Tab cycling order: ask → auto → readonly → ask. */
+/** Shift+Tab cycling order: ask → readonly → plan → auto → ask. */
 export function nextPermissionMode(current: PermissionMode): PermissionMode {
   const index = PERMISSION_MODES.indexOf(current);
   return PERMISSION_MODES[(index + 1) % PERMISSION_MODES.length]!;

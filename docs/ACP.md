@@ -182,8 +182,9 @@ bun bin/transcode.ts acp
 | `TRANSCODE_PERMISSION_MODE` | 行为 |
 | --- | --- |
 | `ask`（默认） | 变更类工具向客户端请求授权 |
-| `auto` | 全部自动允许 |
 | `readonly` | 只允许读/搜索；写和 bash 直接拒绝 |
+| `plan` | 只读；变更被拒并引导 Agent 以实施方案（`PLAN READY`）收尾，不向客户端请求授权 |
+| `auto` | 全部自动允许 |
 
 ## 模型解析
 

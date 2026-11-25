@@ -13,8 +13,8 @@ Usage:
 Environment:
   TRANSCODE_MODEL           Default model (registry id or provider:model)
   TRANSCODE_DEFAULT_PROVIDER Provider for bare model names (default: openai)
-  TRANSCODE_PERMISSION_MODE  ask | auto | readonly (default: ask in ACP mode;
-                            switch at runtime in the REPL with /mode)
+  TRANSCODE_PERMISSION_MODE  ask | readonly | plan | auto (default: ask in ACP mode;
+                            switch at runtime in the REPL with /mode or shift+tab)
   TRANSCODE_MAX_TURNS        Agent tool-call turn cap (default: 200)
   TRANSCODE_SHELL            Override the shell used by the bash tool
                             (Windows: Git Bash is auto-detected)

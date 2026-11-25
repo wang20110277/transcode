@@ -180,3 +180,17 @@ export function buildSystemPrompt(
 
   return sections.join('\n');
 }
+
+const PLAN_MODE_INSTRUCTION =
+  'PLAN MODE: the session is read-only, so do not modify anything. Answer questions directly. ' +
+  'When the user asks for work to be done, explore first, then output a numbered implementation ' +
+  'plan with exact files and changes, ending with the line PLAN READY. The user will approve it ' +
+  'before any changes are made.';
+
+/**
+ * The system prompt of a plan-mode turn. Shared by the REPL and the ACP
+ * session so both surfaces plan the same way.
+ */
+export function withPlanMode(systemPrompt: string): string {
+  return `${systemPrompt}\n\n${PLAN_MODE_INSTRUCTION}`;
+}

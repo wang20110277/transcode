@@ -139,7 +139,7 @@ const commands: Command[] = [
   },
   {
     name: 'mode',
-    description: 'Show or switch permission mode (ask | auto | readonly)',
+    description: 'Show or switch permission mode (ask | readonly | plan | auto)',
     execute: (args) => {
       const target = args[0]?.toLowerCase();
       if (!target) {
@@ -148,7 +148,9 @@ const commands: Command[] = [
             `Current permission mode: ${getPermissionMode()}\n` +
             `Usage: /mode <${PERMISSION_MODES.join('|')}> — ` +
             'ask prompts for mutating tools (read-only commands pass), ' +
-            'auto allows everything, readonly denies mutating tools.',
+            'readonly denies mutating tools, ' +
+            'plan stays read-only and ends each task with an implementation plan (PLAN READY), ' +
+            'auto allows everything.',
         };
       }
       if (!PERMISSION_MODES.includes(target as never)) {

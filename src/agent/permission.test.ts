@@ -34,6 +34,12 @@ describe('permission mode', () => {
     expect(getPermissionMode()).toBe('ask');
   });
 
+  test('initializes to plan from the environment variable', () => {
+    process.env.TRANSCODE_PERMISSION_MODE = 'plan';
+    resetPermissionMode();
+    expect(getPermissionMode()).toBe('plan');
+  });
+
   test('switches at runtime', () => {
     setPermissionMode('auto');
     expect(getPermissionMode()).toBe('auto');
@@ -41,13 +47,18 @@ describe('permission mode', () => {
     expect(getPermissionMode()).toBe('readonly');
   });
 
+  test('switches to plan at runtime', () => {
+    setPermissionMode('plan');
+    expect(getPermissionMode()).toBe('plan');
+  });
+
   test('rejects unknown modes', () => {
     expect(() => setPermissionMode('yolo' as never)).toThrow();
     expect(getPermissionMode()).toBe('ask');
   });
 
-  test('documents the mode list', () => {
-    expect(PERMISSION_MODES).toEqual(['ask', 'auto', 'readonly']);
+  test('lists the modes in shift+tab order: ask, readonly, plan, auto', () => {
+    expect(PERMISSION_MODES).toEqual(['ask', 'readonly', 'plan', 'auto']);
   });
 });
 
@@ -64,10 +75,11 @@ describe('subscribePermissionMode', () => {
 });
 
 describe('nextPermissionMode', () => {
-  test('shift+tab 循环:ask → auto → readonly → ask', async () => {
+  test('shift+tab 循环:ask → readonly → plan → auto → ask(先问、再只读、再计划、最后执行)', async () => {
     const { nextPermissionMode } = await import('./permission.js');
-    expect(nextPermissionMode('ask')).toBe('auto');
-    expect(nextPermissionMode('auto')).toBe('readonly');
-    expect(nextPermissionMode('readonly')).toBe('ask');
+    expect(nextPermissionMode('ask')).toBe('readonly');
+    expect(nextPermissionMode('readonly')).toBe('plan');
+    expect(nextPermissionMode('plan')).toBe('auto');
+    expect(nextPermissionMode('auto')).toBe('ask');
   });
 });
