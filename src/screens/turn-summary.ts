@@ -44,8 +44,3 @@ export function renderCollapsed(summary: string, hiddenLines: string[]): string 
     .filter((line) => line.trim().length > 0).length;
   return `${summary}\n… +${count} lines (ctrl+o 展开明细)`;
 }
-
-/** ctrl+o action: full detail of a folded turn, printed as a new entry. */
-export function renderExpansion(entry: { output: string; hiddenLines: string[] }): string {
-  return `⚙ 展开明细:${entry.hiddenLines.join('')}`;
-}

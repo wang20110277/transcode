@@ -68,8 +68,9 @@ import { fuzzyFilter } from './fuzzy-filter.js';
 import { BANNER_GREEN } from './banner.js';
 import { quietLibraryNoise } from '../provider/library-noise.js';
 import { renderDiff } from './diff-render.js';
-import { createTurnStats, recordCall, renderCollapsed, renderExpansion, shouldCollapse, summaryLine } from './turn-summary.js';
+import { createTurnStats, recordCall, renderCollapsed, shouldCollapse, summaryLine } from './turn-summary.js';
 import { sliceLiveTail } from './live-view.js';
+import { expansionTitle, latestFoldedIndex, NOTHING_FOLDED, stepFoldedIndex, windowedDetail } from './expansion.js';
 import { buildSystemPrompt, INIT_PROMPT, loadProjectContext } from '../agent/system-prompt.js';
 import { HumanMessage, SystemMessage, type BaseMessage } from '@langchain/core/messages';
 
@@ -331,6 +332,14 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
   // current input, a cursor, and a dismissed flag reset when the query changes.
   const [slashCursor, setSlashCursor] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
+  // ctrl+o panel: the folded turn whose detail is shown above the input
+  // box, NOTHING_FOLDED while it says there is none, null while it is closed.
+  const [expansion, setExpansion] = useState<number | null>(null);
+  // The panel shows finished turns; while the agent works, its own tool
+  // calls are on show.
+  useEffect(() => {
+    if (busy) setExpansion(null);
+  }, [busy]);
   const slashPrefix = phase === 'idle' && !busy ? slashQuery(input) : null;
   const slashCandidates = useMemo(
     () =>
@@ -1287,6 +1296,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
 
       if (cmdName === 'clear') {
         ctx.clearHistory();
+        setExpansion(null);
         setChat(prev => ({ ...prev, history: bannerEntryRef.current ? [bannerEntryRef.current] : [] }));
         // Static output cannot be un-printed: /clear starts a fresh
         // transcript below (scrollback keeps the old one). The confirmation
@@ -1323,24 +1333,40 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       // eslint-disable-next-line no-console
       console.error(`CB ${JSON.stringify(ch)} ret=${key.return} esc=${key.escape}`);
     }
-    // ctrl+o: expand the most recent folded turn (repeat presses walk
-    // backwards). Printed static entries never re-render, so expansion
-    // lands as a NEW entry and the source entry drops its hiddenLines
-    // (same-length mutation — Static-safe).
+    // ctrl+o toggles the panel with the detail of folded turns (expansion.ts).
+    // Printed entries never change, so the detail is shown in the live region
+    // instead of being printed under its turn. While the agent works, its
+    // own tool calls are on show and the key does nothing.
     if (key.ctrl && (ch === 'o' || ch === 'O')) {
-      const history = chat.history;
-      for (let i = history.length - 1; i >= 0; i--) {
-        const entry = history[i];
-        if (entry?.hiddenLines?.length) {
-          const expansion = renderExpansion({ output: entry.output, hiddenLines: entry.hiddenLines });
-          const index = i;
-          setChat(prev => {
-            const next = [...prev.history];
-            next[index] = { ...next[index]!, hiddenLines: undefined };
-            return { ...prev, history: [...next, { input: '', output: expansion }] };
-          });
-          break;
-        }
+      if (!busyRef.current) {
+        setExpansion(current => (current === null ? latestFoldedIndex(chat.history) : null));
+        dragFlush();
+      }
+      return;
+    }
+    // "Nothing is folded" goes away on the next key, which keeps its meaning.
+    if (expansionIndex === NOTHING_FOLDED) {
+      setExpansion(null);
+      dragFlush();
+    }
+    // Esc closes the panel first; only with it closed does Esc mean the rest.
+    if (key.escape && expansionIndex !== null) {
+      setExpansion(null);
+      dragFlush();
+      return;
+    }
+    // Detail panel open: the arrows move between folded turns, not through
+    // the input history — unless a file mention popup is open on top.
+    if (
+      expansionIndex !== null &&
+      expansionIndex >= 0 &&
+      (key.upArrow || key.downArrow) &&
+      !(mentionActive && mentionCandidates.length > 0)
+    ) {
+      const next = stepFoldedIndex(chat.history, expansionIndex, key.upArrow ? -1 : 1);
+      if (next !== expansionIndex) {
+        setExpansion(next);
+        dragFlush();
       }
       return;
     }
@@ -1825,6 +1851,28 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
               ? 'allow?> '
               : '> ';
 
+  // ctrl+o panel. An index counts only while it still points at a folded
+  // entry, so a history that was replaced underneath it leaves it closed.
+  const expansionIndex =
+    expansion === NOTHING_FOLDED
+      ? NOTHING_FOLDED
+      : expansion !== null && (chat.history[expansion]?.hiddenLines?.length ?? 0) > 0
+        ? expansion
+        : null;
+  const expansionView =
+    expansionIndex !== null && expansionIndex >= 0
+      ? {
+          title: expansionTitle(chat.history, expansionIndex),
+          // Windowed like the live tail: the panel shares the frame with the
+          // input box (6 rows) and its own "… +N lines" line.
+          detail: windowedDetail(
+            chat.history[expansionIndex]!.hiddenLines!,
+            (stdout?.rows ?? 24) - 8,
+            (stdout?.columns ?? 80) - 4,
+          ),
+        }
+      : undefined;
+
   return (
     <Box flexDirection="column" paddingX={1}>
       <Static items={chat.history}>
@@ -1887,6 +1935,23 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       {liveTail.visible && (
         <Box marginLeft={2}>
           <Text>{liveTail.visible}</Text>
+        </Box>
+      )}
+
+      {expansionIndex === NOTHING_FOLDED && (
+        <Box marginLeft={2} flexDirection="column">
+          <Text color="yellow">没有折叠的回合。</Text>
+          <Text color="gray" dimColor>任意键关闭</Text>
+        </Box>
+      )}
+      {expansionView && (
+        <Box marginLeft={2} flexDirection="column">
+          <Text color="cyan" bold>{expansionView.title}</Text>
+          <Text color="gray" dimColor>ctrl+o 收起 · ↑↓ 切换回合</Text>
+          {expansionView.detail.hidden > 0 && (
+            <Text color="gray" dimColor>… +{expansionView.detail.hidden} lines</Text>
+          )}
+          {expansionView.detail.visible && <Text>{expansionView.detail.visible}</Text>}
         </Box>
       )}
 

@@ -50,13 +50,4 @@ describe('static render helpers', () => {
     expect(out).toContain('… +4 lines (ctrl+o 展开明细)');
     expect(renderCollapsed('S', [])).toBe('S');
   });
-
-  test('renderExpansion:全量明细 + 头,无 collapse 提示', async () => {
-    const { renderExpansion } = await import('./turn-summary.js');
-    const out = renderExpansion({ output: '⚙ 2 tool calls · …', hiddenLines: ['\n⚙ read_file a ✓', '\n⚙ bash t ✓'] });
-    expect(out).toContain('展开明细');
-    expect(out).toContain('read_file a ✓');
-    expect(out).toContain('bash t ✓');
-    expect(out).not.toContain('collapse');
-  });
 });
