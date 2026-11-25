@@ -2,10 +2,10 @@
 
 多模型 AI 编码 Agent CLI。当前 MVP 的目标是：**作为本地 Agent 被 transonce、multica 等客户端通过 ACP 调用**。
 
-- 终端侧：Ink REPL（命令：`help` / `models` / `mode` / `route` / `init` / `memory` / `remember` / `forget` / `search` / `clear` / `exit`）
+- 终端侧：Ink REPL（`/help` 列出全部命令，一览见下文「REPL 命令」）
 - Agent 侧：`transcode acp` 启动 ACP v1 stdio 服务，供 transonce、multica 等客户端调用
 - 模型侧：档案（Profile）+ 角色（Role）路由——一个模型 ID 对应一个地址，不同任务可派发不同模型（含子 Agent）
-- 工具侧：`read_file` / `write_file` / `edit_file` / `glob` / `grep` / `bash` / `todo_write` / `memory_save` / `web_fetch` / `web_search` / `ask_model` / `dispatch_agent`
+- 工具侧：`read_file` / `write_file` / `edit_file` / `glob` / `grep` / `bash` / `bash_output` / `todo_write` / `ask_model` / `dispatch_agent` / `web_fetch` / `web_search` / `memory_save` / `memory_delete`
 
 ## 环境要求
 
@@ -13,7 +13,7 @@
 - Bun >= 1.3（仅本仓库开发/构建需要）
 - 至少一个模型提供商的 API Key
 
-**平台**：macOS / Linux 原生支持。Windows 需安装 [Git Bash](https://git-scm.com/)（bash 工具自动探测 `C:\Program Files\Git\bin\bash.exe` 等常见位置；也可用 `TRANSCODE_SHELL` 显式指定），超时终止走 `taskkill /T /F` 杀进程树，路径在 Windows/Git-Bash 两种形态间自动转换。纯 PowerShell 环境（无 Git Bash）暂不支持。
+**平台**：macOS / Linux / Windows。Windows 上 bash 工具按这个顺序选 shell：`TRANSCODE_SHELL` 显式指定 → 环境里的 `SHELL`（bash / zsh）→ Git Bash（自动探测 `C:\Program Files\Git\bin\bash.exe` 等常见位置）→ PowerShell 7 → 系统自带的 Windows PowerShell 5，所以没装 Git Bash 也能直接用。超时终止走 `taskkill /T /F` 杀进程树，路径在 Windows/Git-Bash 两种形态间自动转换。
 
 ```bash
 bun install
@@ -112,9 +112,16 @@ bun run test:acp:real        # 完整 ACP + 工具调用（会创建临时 works
 | `TRANSCODE_MAX_TURNS` | Agent 工具回合上限，默认 `200`；触顶会明确提示并写入对话 |
 | `TRANSCODE_SUBAGENT_MAX_TURNS` | 子 Agent 回合上限，默认 `25` |
 | `TRANSCODE_SKIP_MODEL_CHECK` | 设为 `1` 跳过 /models 的连通性测试 |
+| `TRANSCODE_SHELL` | 指定 bash 工具使用的 shell；Windows 上不填则自动探测 Git Bash / PowerShell |
+| `TRANSCODE_COMPACT_TOKENS` | 自动压缩的上下文预算（token），低于 `autoCompact.byModel`、高于全局配置；旧变量 `TRANSCODE_COMPACT_CHARS` 按 `/4` 折算 |
+| `TRANSCODE_CONFIG_PATH` | 配置文件路径，默认 `~/.transcode.json` |
+| `TRANSCODE_USER_DIR` | 用户目录，默认 `~/.transcode`（全局指令 `TRANS.md` 与 `memory/`） |
+| `TRANSCODE_SESSIONS_DIR` | 会话保存目录，默认 `~/.transcode/sessions` |
+| `TRANSCODE_SKIP_UPDATE` | 设为 `1` 关闭启动时的自动更新 |
+| `TRANSCODE_UPDATE_INTERVAL_HOURS` | 自动更新的检查间隔（小时），默认 24 |
 | `TRANSCODE_MOCK` | 设为 `1` 使用本地 mock 模型（仅用于协议测试） |
 
-`provider:model` 支持的前缀：`openai`、`anthropic`、`deepseek`、`glm`、`glmc`、`minimax`、`kimi`、`moonshot`。
+`provider:model` 支持的前缀：`openai`、`anthropic`、`deepseek`、`glm`、`glmc`、`minimax`、`kimi`、`moonshot`、`custom`。
 裸模型名会使用 `TRANSCODE_DEFAULT_PROVIDER`；`openai` 前缀和裸模型名可以用 `OPENAI_BASE_URL` 指向兼容网关，`TRANSCODE_BASE_URL` 则可以覆盖任意 provider。
 
 ## 本地运行
@@ -128,16 +135,49 @@ bun run start
 
 # 检查
 bun run typecheck
+bun test                  # 单元测试与 REPL 集成测试
 bun run test:acp          # ACP 协议 + 工具事件（mock 模型）
 bun run test:acp:openai   # 真实 LangChain 流式 + 工具循环（本地假 OpenAI 服务）
 bun run test:acp:real     # 真实模型 + 真实工具调用（无 key 时自动跳过）
 ```
 
-npm 全局安装的用户可以自升级：
+## 升级与自动更新
+
+只对 npm 全局安装生效。仓库检出、`bun link` 这类开发安装不会被改动，执行 `transcode upgrade` 时会给出指引。
 
 ```bash
-transcode upgrade         # 检查 registry 最新版并升级（开发安装会给出指引）
+transcode upgrade            # 升级到 registry 最新版
+transcode upgrade 0.12.9     # 安装指定版本
 ```
+
+REPL 启动时会在后台顺带检查一次更新（默认 24 小时内最多一次，不阻塞启动）：有新版本就静默安装，并在对话区提示一行 `⟳ 已自动更新 0.12.8 → 0.12.9，重启 transcode 生效`。当前会话继续运行旧版本，重启后才是新版；检查失败不出声，下次启动再试。
+
+在 `~/.transcode.json` 里控制：
+
+- `"autoUpdate": false` 关闭（默认开启）
+- `"autoUpdate": { "target": "0.12.9" }` 钉住该版本，启动时发现版本不一致就装回它；`target` 缺省是 `"latest"`
+
+检查和安装都走官方 registry（`registry.npmjs.org`）。镜像的元数据和包是分开同步的，刚发布的版本可能查得到却装不到，走镜像会被“升级”成旧版。
+
+## REPL 命令
+
+| 命令 | 作用 |
+| --- | --- |
+| `/help` | 列出全部命令 |
+| `/models` | 选厂商 → 选模型 → 输入 key，切换当前模型（见「配置模型」） |
+| `/mode [模式]` | 查看或切换权限模式：`ask` / `readonly` / `plan` / `auto`，Shift+Tab 循环切换 |
+| `/route [角色 档案]` | 查看或设置角色 → 模型档案的路由；`/route 角色 -` 删除角色 |
+| `/compact [N]` | 无参查看上下文预算；`/compact <N>` 把旧轮提炼成前情提要，保留最近 N 轮（默认 1） |
+| `/new` | 开始新对话 |
+| `/sessions [关键词]` | 列出或搜索历史对话（见「会话」） |
+| `/resume [序号\|id\|标题片段] [N]` | 恢复历史对话（见「会话」） |
+| `/init` | 让 Agent 分析项目并生成 `TRANS.md` |
+| `/memory` | 查看用户记忆（全局指令 + 记忆索引） |
+| `/remember <text>` | 手动保存一条记忆 |
+| `/forget <name>` | 删除一条记忆 |
+| `/search` | 配置联网搜索商与 key |
+| `/clear` | 开始新对话并重置对话区，已打印的内容仍留在终端滚动缓冲里 |
+| `/exit` | 退出 |
 
 ## 接入 multica
 
@@ -213,6 +253,10 @@ ACP 默认权限模式是 `ask`：写文件、改文件、执行命令前会向�
 | `todo_write` | 任务清单（`[x]/[~]/[ ]`），多步任务防漂移 | 否 |
 | `ask_model` | 单次问答式分派：把子问题发给某角色的模型，答案回入对话 | 否 |
 | `dispatch_agent` | 派发子 Agent：独立模型 + 工具白名单 + 自己的回合循环，只回传最终报告 | 是 |
+| `web_fetch` | 抓取 URL 返回可读文本（见「联网工具」） | 否 |
+| `web_search` | 联网搜索，配置了搜索商之后才对模型可见（见「联网工具」） | 否 |
+| `memory_save` | 保存或更新一条用户记忆：一次一条，跨会话生效（见「用户记忆」） | 是 |
+| `memory_delete` | 按名称删除一条用户记忆 | 是 |
 
 **bash 免确认规则**：`ls`/`cat`/`grep`/`git status` 等只读命令（含管道、`2>/dev/null` 等无害重定向）自动放行并在结果行标注 `(read-only)`；写入重定向、命令替换、危险参数（`find -delete`、`sed -i`…）照常逐次确认。连续重复调用（含 A-B-A-B 振荡）会被熔断并引导换路子。
 
@@ -247,9 +291,18 @@ ACP 默认权限模式是 `ask`：写文件、改文件、执行命令前会向�
 跨会话、跨项目记住你的偏好与对 Agent 的纠正，存放在 `~/.transcode/`：
 
 - **全局指令** `~/.transcode/TRANS.md`——手写一次、所有项目生效（"所有项目用 bun"、"commit 用中文"）
-- **自动记忆** `~/.transcode/memory/`——一条事实一个文件，`MEMORY.md` 是索引。Agent 有 `memory_save` / `memory_delete` 工具：你纠正它的行为或表达持久偏好时，它会自己记下来；也可以直接 `/remember <text>` 手动存、`/forget <name>` 删、`/memory` 查看
+- **自动记忆** `~/.transcode/memory/`——一条事实一个文件，`MEMORY.md` 是索引。Agent 有 `memory_save` / `memory_delete` 工具：你纠正它的行为或表达持久偏好时，它会自己记下来（`ask` 模式下每次写入或删除都会先问你）；也可以直接 `/remember <text>` 手动存、`/forget <name>` 删、`/memory` 查看
 
 注入预算 12k 字符，超预算整条省略最低优先级（user > feedback > project > reference）并在提示中注明。记忆目录文件是事实源，`MEMORY.md` 删除后会自动重建。测试与隔离用环境变量 `TRANSCODE_USER_DIR` 覆盖根目录。
+
+## 会话
+
+对话会自动保存，关掉终端之后可以接着聊。
+
+- **自动保存**：每轮结束后写入 `~/.transcode/sessions/<项目目录>/<会话 id>.json`，按项目目录分区（`/a/b` → `-a-b`，`C:\Users\x` → `C--Users-x`）。标题由模型根据首轮对话生成
+- **`/new`**：开始新对话。**`/sessions [关键词]`**：按时间倒序列出历史对话（最多 20 条），关键词匹配标题和消息内容
+- **`/resume`**：不带参数时弹出**本项目**的会话选择器（↑↓ 选择 · Enter 恢复 · Esc 取消）；`/resume <序号|id|标题片段>` 按最近一次 `/sessions` 列表里的序号、会话 id 或标题片段恢复
+- **恢复即压缩**：只保留最近 N 轮原文（`/resume … N` 指定，默认 1），更早的轮次由模型提炼成「前情提要」，聊天区以提要块加最近几轮的形式展示；提炼失败则原样恢复完整对话。负责提炼的模型可以用 `/route compact <档案>` 单独指定
 
 ## 渲染与交互
 
@@ -257,6 +310,12 @@ ACP 默认权限模式是 `ask`：写文件、改文件、执行命令前会向�
 - **`ctrl+o` 展开明细**：多工具回合折叠为一行摘要（`… +N lines (ctrl+o 展开明细)`），按 ctrl+o 将最近一个折叠回合的工具明细展开打印；连按依次展开更早的回合
 - **`/clear` 语义**：已打印的历史无法"收回"——/clear 在下方开始新对话，旧内容保留在终端滚动缓冲中（可自行清屏）
 - **切换模型后的头部**：启动横幅只打印一次、无法原地改写——`/models` 切换成功后在切换行下方重印一份头部，`Model:` 为当前模型
+- **输入排队**：Agent 工作时照常打字、回车，内容排进队列（显示在输入框上方，每条以 `⏎` 开头）；回合自然结束后自动发送下一条。Esc 取消或回合报错后队列冻结，空回车续发，Esc 清空
+- **`@` 引用文件**：输入 `@` 加路径片段会弹出文件列表（先按子串、再按字符顺序匹配），↑↓ 选择，Tab / Enter 补全路径
+- **`/` 命令补全**：弹出前缀匹配的命令，↑↓ 选择，Tab / Enter 补全，Esc 关闭
+- **↑ / ↓**：翻出之前输入过的内容
+- **Esc**：先关掉打开的弹窗或选择器；生成中则取消当前回合；队列非空则清空队列；都没有时退出程序
+- **授权提示**：`allow? y/n`，`y` 或回车允许这一次，`n` 拒绝
 
 ## 联网工具
 
@@ -265,33 +324,29 @@ ACP 默认权限模式是 `ask`：写文件、改文件、执行命令前会向�
   - **`/search` 交互**：选搜索商 → 输 key → 发真实测试查询验证 → 自动写入配置
   - **手改 JSON**：`~/.transcode.json` 的 `webSearch: { provider: "tavily" | "brave", apiKey: "…" }`，改完下一轮生效
 
-未配置时 `web_search` 对模型不可见（不浪费轮次）；配置存在但无效会在启动时提示一行。请求使用诚实 UA（`Mozilla/5.0 (compatible; transcode/<version>)`），部分强防护站点可能 403。全局安装（bun 运行时）的联网请求自动识别 `HTTP(S)_PROXY`；自建 Node dist 路径暂不支持代理。
+未配置时 `web_search` 对模型不可见（不浪费轮次）；配置存在但无效会在启动时提示一行。请求使用诚实 UA（`Mozilla/5.0 (compatible; transcode/<version>)`），部分强防护站点可能 403。用 Bun 运行时（如 `bun link` 之后直接跑）联网请求会自动识别 `HTTP(S)_PROXY`；npm 全局安装走 Node，暂不支持代理。
 
 ## ACP 协议
 
 支持的方法、事件格式、权限流程和调试方式见 [docs/ACP.md](docs/ACP.md)。
 
-## MVP 限制
-
-- 不支持 MCP（会忽略 `mcpServers` 并在 stderr 提示）
-- 不支持 ACP session 持久化：`loadSession: false`，进程内 session 在进程退出后丢失
-- prompt 仍以文本为主；图片只支持 `read_file` 读取（≤3MB，多模态模型直读，其余经 vision 角色转述）
-- 没有 Web 搜索、hooks、自动压缩；子 Agent 为隔离式（fork 继承上下文模式规划中）
-- 工具输出有长度上限，避免单次上下文爆炸
-- `TRANSCODE_MOCK=1` 仅用于协议 smoke test，不会调用真实模型
-
 ## 目录
 
 ```
+bin/transcode.ts   可执行入口
 src/
-  acp/            ACP JSON-RPC 传输、server、session
-  agent/          Agent 循环、工具实现、系统提示
-  provider/       多模型注册与 LangChain 适配
-  screens/        Ink REPL
-  commands.ts     REPL 命令
-  cli.ts          命令行入口分发
-  main.tsx        REPL 入口
-bin/transcode.ts  可执行入口
-scripts/acp-smoke.ts
-docs/ACP.md
+  acp/             ACP JSON-RPC 传输、server、session
+  agent/           Agent 循环、权限模式、系统提示、用户记忆
+    tools/         工具实现（读写、搜索、bash、子任务分派、联网、记忆）
+  provider/        多模型注册、自定义网关、角色路由、联网搜索
+  screens/         Ink REPL 与渲染辅助
+  sessions/        会话存储与压缩
+  tui/             键盘输入拆分
+  commands.ts      REPL 命令
+  config.ts        ~/.transcode.json 读写
+  upgrade.ts       transcode upgrade 与自动更新
+  cli.ts           命令行入口分发
+  main.tsx         REPL 入口
+docs/              ACP.md 与设计文档（docs/superpowers/）
+scripts/           构建、版本同步与 ACP 冒烟脚本
 ```
