@@ -43,6 +43,9 @@ const dispatchAgentTool = createDispatchAgentTool({
 
 export const AGENT_TOOLS: AgentTool[] = [...dispatchPool, dispatchAgentTool];
 
+/** Names of every registered tool: what a permission rule may name. */
+export const AGENT_TOOL_NAMES: readonly string[] = AGENT_TOOLS.map((item) => item.name);
+
 export function findAgentTool(name: string): AgentTool | undefined {
   return AGENT_TOOLS.find((item) => item.name === name);
 }

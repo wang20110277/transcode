@@ -10,12 +10,14 @@ import { createModel, getAvailableModels, resolveModel } from '../provider/provi
 import { runAgentLoop, type AgentEvent, type PermissionRequest } from '../agent/loop.js';
 import { createToolSession, type ToolSession } from '../agent/tools/index.js';
 import { getPermissionMode } from '../agent/permission.js';
+import { rememberAlways } from '../agent/permission-rules.js';
 import { buildSystemPrompt, loadProjectContext, withPlanMode } from '../agent/system-prompt.js';
 import { resolveContextTokens } from '../sessions/compact.js';
 import {
   RPC_ERRORS,
   RpcError,
 } from './transport.js';
+import { acpPermissionOptions, permissionChoice } from './permissions.js';
 import type {
   AcpModelInfo,
   AcpPermissionRequest,
@@ -143,6 +145,7 @@ export class AcpSession {
         messages: this.messages,
         systemPrompt,
         planMode,
+        permissionMode: getPermissionMode(),
         ...(budget.enabled && budget.tokens > 0 ? { contextTokens: budget.tokens } : {}),
         signal,
         toolSession: this.toolSession,
@@ -262,18 +265,19 @@ export class AcpSession {
             status: 'pending',
             rawInput: request.input,
           },
-          options: [
-            { optionId: 'allow_once', name: 'Allow once', kind: 'allow_once' },
-            { optionId: 'reject_once', name: 'Reject', kind: 'reject_once' },
-          ],
+          // "Always" only when remembering a rule can have an effect.
+          options: acpPermissionOptions(request.alwaysRule !== undefined),
         },
         signal,
       );
 
-      if (response.outcome.outcome !== 'selected') return false;
-      return ['allow_once', 'allow_session', 'approve_for_session'].includes(
-        response.outcome.optionId,
+      const choice = permissionChoice(
+        response.outcome.outcome === 'selected' ? response.outcome.optionId : undefined,
       );
+      const call = { name: request.name, input: request.input };
+      if (choice === 'always') rememberAlways(call, this.cwd, 'allow');
+      if (choice === 'reject_always') rememberAlways(call, this.cwd, 'deny');
+      return choice === 'once' || choice === 'always';
     } catch (error) {
       process.stderr.write(
         `[transcode] permission request failed, denying ${request.name}: ${

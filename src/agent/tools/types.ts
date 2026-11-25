@@ -1,5 +1,6 @@
 import type { z } from 'zod';
 import type { ToolSession } from './session.js';
+import type { PermissionMode } from '../permission.js';
 
 export type ToolKind =
   | 'read'
@@ -25,9 +26,13 @@ export interface ToolContext {
     title: string;
     kind: ToolKind;
     input: Record<string, unknown>;
+    /** The rule "always allow" would remember; absent when a configured `ask` rule caused the question. */
+    alwaysRule?: string;
   }) => Promise<boolean>;
   /** Event sink for nested agent progress (dispatch_agent forwards here). */
   emit?: (event: { type: 'tool_call'; [key: string]: unknown }) => void;
+  /** Permission mode of the run that owns this context, so nested agents are gated the same way. */
+  permissionMode?: PermissionMode;
 }
 
 /** Rich execute result: model-facing output plus optional extras. */

@@ -3,6 +3,13 @@ import path from 'node:path';
 import type { ModelId } from './provider/provider.js';
 import { getAvailableModels } from './provider/provider.js';
 import { getPermissionMode, PERMISSION_MODES, setPermissionMode } from './agent/permission.js';
+import {
+  clearSessionRules,
+  getSessionRules,
+  loadPermissionRules,
+  renderPermissionRules,
+} from './agent/permission-rules.js';
+import { AGENT_TOOL_NAMES } from './agent/tools/index.js';
 import { getRouting, resolveRole, setRouting } from './provider/provider.js';
 import {
   deleteMemory,
@@ -160,6 +167,21 @@ const commands: Command[] = [
       // Silent switch: the REPL's mode indicator is the feedback. An empty
       // output lands no transcript entry (same contract as /clear).
       return { output: '' };
+    },
+  },
+  {
+    name: 'permissions',
+    description: 'Show permission rules; "clear" forgets those of this session',
+    execute: (args) => {
+      if (args[0]?.toLowerCase() === 'clear') {
+        const count = clearSessionRules();
+        return {
+          output: count > 0 ? `已清空本会话记下的 ${count} 条规则。` : '本会话没有记下任何规则。',
+        };
+      }
+      return {
+        output: renderPermissionRules(getPermissionMode(), loadPermissionRules(AGENT_TOOL_NAMES), getSessionRules()),
+      };
     },
   },
   {

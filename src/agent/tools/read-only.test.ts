@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { isReadOnlyCommand } from './read-only.js';
+import { isReadOnlyCommand, parseSegments } from './read-only.js';
 
 describe('isReadOnlyCommand', () => {
   test('simple read-only commands pass', () => {
@@ -93,5 +93,28 @@ describe('isReadOnlyCommand', () => {
   test('input redirection is read-only, process substitution is not', () => {
     expect(isReadOnlyCommand('sort < input.txt')).toBe(true);
     expect(isReadOnlyCommand('cat <(ls)')).toBe(false);
+  });
+});
+
+describe('parseSegments', () => {
+  test('returns each segment with its own source text', () => {
+    const { segments, unsafe } = parseSegments(
+      'npm test  &&  FOO=1 git status | echo "a  b" ; ls # note\npwd',
+    );
+
+    expect(unsafe).toBe(false);
+    expect(segments.map((segment) => segment.raw)).toEqual([
+      'npm test',
+      'FOO=1 git status',
+      'echo "a b"',
+      'ls',
+      'pwd',
+    ]);
+    // Quoted text stays as written in the tokens; only `raw` collapses whitespace.
+    expect(segments[2]!.tokens).toEqual(['echo', 'a  b']);
+  });
+
+  test('an empty command has no segments', () => {
+    expect(parseSegments('   ')).toEqual({ segments: [], unsafe: false });
   });
 });

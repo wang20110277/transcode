@@ -161,6 +161,7 @@ bun bin/transcode.ts acp
     },
     "options": [
       { "optionId": "allow_once", "name": "Allow once", "kind": "allow_once" },
+      { "optionId": "allow_always", "name": "Always allow", "kind": "allow_always" },
       { "optionId": "reject_once", "name": "Reject", "kind": "reject_once" }
     ]
   }
@@ -174,6 +175,10 @@ bun bin/transcode.ts acp
 ```
 
 选择拒绝或 `{"outcome":{"outcome":"cancelled"}}` 都会让工具返回失败，但不会中断整个 turn。
+
+`allow_always` 允许这一次，并在本会话内记住归纳出的一类调用（如 `bash(npm test*)`），之后同类调用不再请求。`reject_always` 拒绝，并把这一类记成拒绝。因为配置里的 `ask` 规则而发出的请求只有「允许一次」和「拒绝」两个选项。
+
+配置里的权限规则（`~/.transcode.json` 的 `permissions`，写法见 README 的「权限规则」）对 ACP 同样生效：命中 deny 直接拒绝、不请求；命中 allow 直接放行、不请求。写错的规则会被忽略，`initialize` 时往 stderr 写一行。
 
 超时 60 秒或客户端不支持该方法时，按拒绝处理。
 

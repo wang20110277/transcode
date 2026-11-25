@@ -3,6 +3,8 @@ import { RPC_ERRORS, RpcError, JsonRpcTransport } from './transport.js';
 import { AcpSession, sessionCwd, sessionNewResult, type AcpSessionHost } from './session.js';
 import { loadConfig } from '../config.js';
 import { webSearchConfigWarning } from '../provider/web-search.js';
+import { invalidRulesNotice, loadPermissionRules } from '../agent/permission-rules.js';
+import { AGENT_TOOL_NAMES } from '../agent/tools/index.js';
 import { VERSION } from '../version.js';
 import type {
   AcpPermissionRequest,
@@ -67,7 +69,10 @@ export class AcpServer implements AcpSessionHost {
     const params = asRecord(rawParams);
 
     switch (method) {
-      case 'initialize':
+      case 'initialize': {
+        // ACP has no /permissions: stderr is the only place to say that rules were ignored.
+        const notice = invalidRulesNotice(loadPermissionRules(AGENT_TOOL_NAMES));
+        if (notice) process.stderr.write(`${notice}\n`);
         return {
           protocolVersion: 1,
           agentInfo: { name: 'transcode', version: VERSION },
@@ -85,6 +90,7 @@ export class AcpServer implements AcpSessionHost {
           },
           authMethods: [],
         };
+      }
 
       case 'authenticate':
         return null;

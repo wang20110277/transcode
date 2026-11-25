@@ -19,6 +19,13 @@ import {
 } from './tools/index.js';
 import { estimateTokens } from '../sessions/compact.js';
 import { askRole, getRouting } from '../provider/provider.js';
+import {
+  evaluatePermission,
+  getSessionRules,
+  loadPermissionRules,
+  PLAN_DENIAL,
+} from './permission-rules.js';
+import type { PermissionMode } from './permission.js';
 
 export type AgentEvent =
   | { type: 'text'; text: string }
@@ -42,6 +49,8 @@ export type AgentEvent =
       diff?: string;
       /** True when a mutating tool ran without prompting (read-only input). */
       skippedPermission?: boolean;
+      /** The rule that allowed a mutating call without asking. */
+      allowedBy?: string;
     };
 
 export interface PermissionRequest {
@@ -50,6 +59,8 @@ export interface PermissionRequest {
   title: string;
   kind: ToolKind;
   input: Record<string, unknown>;
+  /** The rule "always allow" would remember; absent when a configured `ask` rule caused the question. */
+  alwaysRule?: string;
 }
 
 export type RequestPermission = (request: PermissionRequest) => Promise<boolean>;
@@ -77,6 +88,12 @@ export interface AgentLoopOptions {
   toolSession?: ToolSession;
   /** Plan mode: read-only exploration; mutating tools are denied with guidance. */
   planMode?: boolean;
+  /**
+   * Permission mode for this run, ask when omitted: the mode gates
+   * mutations, then the configured and session rules apply. `planMode: true`
+   * overrides it.
+   */
+  permissionMode?: PermissionMode;
   /** Vision proxy override (tests). Default: routing.vision → askRole('vision'). */
   describeImages?: (images: Array<{ data: string; mediaType: string }>) => Promise<string>;
 }
@@ -335,6 +352,8 @@ export async function runAgentLoop(
   const envTurns = Number(process.env.TRANSCODE_MAX_TURNS);
   const maxTurns = options.maxTurns ?? (Number.isFinite(envTurns) && envTurns > 0 ? envTurns : 200);
   const toolSession = options.toolSession ?? createToolSession(options.cwd);
+  // A rule may only name tools this run can call.
+  const ruleToolNames = (options.tools ?? AGENT_TOOLS).map((item) => item.name);
   if (!options.model) throw new Error('No model configured for the agent loop');
 
   const runnable =
@@ -507,6 +526,7 @@ export async function runAgentLoop(
 
       let result: { ok: boolean; output: string; diff?: string; images?: Array<{ data: string; mediaType: string }> };
       let skippedPermission = false;
+      let allowedBy: string | undefined;
 
       // Circuit breaker (windowed): see recentKeys declaration.
       const key = `${call.name}:${stableKey(input)}`;
@@ -518,46 +538,60 @@ export async function runAgentLoop(
         result = { ok: false, output: `Unknown tool: ${call.name}` };
       } else if (occurrences >= 3) {
         result = { ok: false, output: `Error: ${REPEAT_GUIDANCE}` };
-      } else if (options.planMode === true && tool.isMutating && tool.isReadOnly?.(input) !== true) {
-        result = {
-          ok: false,
-          output:
-            'Plan mode is read-only: mutations are disabled. Finish exploring and output the ' +
-            'numbered implementation plan (end with the line PLAN READY). The user will approve ' +
-            'it before any changes are made.',
-        };
       } else {
+        // One gate for both surfaces. `planMode: true` keeps meaning plan mode.
+        const permissionMode: PermissionMode = options.planMode ? 'plan' : (options.permissionMode ?? 'ask');
         const readOnly = tool.isReadOnly?.(input) === true;
-        const needsPermission = tool.isMutating && !readOnly;
-        skippedPermission = tool.isMutating && readOnly;
-        const allowed =
-          !needsPermission || !options.requestPermission
-            ? true
-            : await options.requestPermission({
-                toolCallId,
-                name: tool.name,
-                title,
-                kind: tool.kind,
-                input,
-              });
+        const verdict = evaluatePermission(
+          {
+            name: tool.name,
+            input,
+            cwd: options.cwd,
+            shellCwd: toolSession.cwd,
+            isMutating: tool.isMutating,
+            readOnly,
+          },
+          permissionMode,
+          loadPermissionRules(ruleToolNames),
+          getSessionRules(),
+        );
 
-        result = allowed
-          ? await invokeTool(tool, input, {
-              cwd: toolSession.cwd,
-              signal: options.signal,
-              session: toolSession,
-              requestPermission: options.requestPermission,
-              emit: options.onEvent as (event: { type: 'tool_call' }) => void,
-            })
-          : { ok: false, output: 'Permission denied by the client.' };
+        if (verdict.action === 'deny') {
+          result = { ok: false, output: verdict.message };
+        } else {
+          skippedPermission = tool.isMutating && readOnly;
+          allowedBy = verdict.action === 'allow' ? verdict.allowedBy?.text : undefined;
+          const allowed =
+            verdict.action !== 'ask' || !options.requestPermission
+              ? true
+              : await options.requestPermission({
+                  toolCallId,
+                  name: tool.name,
+                  title,
+                  kind: tool.kind,
+                  input,
+                  ...(verdict.alwaysRule ? { alwaysRule: verdict.alwaysRule } : {}),
+                });
 
-        if (allowed && tool.isMutating && tool.isReadOnly?.(input) !== true) {
-          hasActed = true;
-          callsSinceAction = 0;
-          // "Delivered" means a file write; mutating bash is not a deliverable
-          // and must not trigger the wrap-up message.
-          if (tool.name === 'write_file' || tool.name === 'edit_file') {
-            hasDelivered = true;
+          result = allowed
+            ? await invokeTool(tool, input, {
+                cwd: toolSession.cwd,
+                signal: options.signal,
+                session: toolSession,
+                requestPermission: options.requestPermission,
+                permissionMode,
+                emit: options.onEvent as (event: { type: 'tool_call' }) => void,
+              })
+            : { ok: false, output: 'Permission denied by the client.' };
+
+          if (allowed && tool.isMutating && tool.isReadOnly?.(input) !== true) {
+            hasActed = true;
+            callsSinceAction = 0;
+            // "Delivered" means a file write; mutating bash is not a deliverable
+            // and must not trigger the wrap-up message.
+            if (tool.name === 'write_file' || tool.name === 'edit_file') {
+              hasDelivered = true;
+            }
           }
         }
       }
@@ -572,6 +606,7 @@ export async function runAgentLoop(
         ok: result.ok,
         diff: result.diff,
         skippedPermission,
+        allowedBy,
       });
 
       // Image auto-proxy: when a vision role is routed (or a test describer

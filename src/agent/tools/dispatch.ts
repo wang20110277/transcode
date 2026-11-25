@@ -128,6 +128,7 @@ export function createDispatchAgentTool(deps: DispatchDeps = {}): AgentTool {
           }
         },
         requestPermission: ctx.requestPermission,
+        permissionMode: ctx.permissionMode,
       });
 
       const lastAi = [...result.messages].reverse().find((message) => message.getType() === 'ai');

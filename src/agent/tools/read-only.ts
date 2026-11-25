@@ -26,8 +26,10 @@ const FIND_UNSAFE_FLAGS = new Set([
   '-fprint', '-fprint0',
 ]);
 
-interface Segment {
+export interface CommandSegment {
   tokens: string[];
+  /** The segment's source text: outer whitespace trimmed, runs of whitespace collapsed. */
+  raw: string;
 }
 
 /**
@@ -35,12 +37,14 @@ interface Segment {
  * whether any unquoted disqualifying metacharacter appears. Backslash
  * escapes and single/double quotes are respected.
  */
-function parseSegments(command: string): { segments: Segment[]; unsafe: boolean } {
-  const segments: Segment[] = [];
-  let current: Segment = { tokens: [] };
+export function parseSegments(command: string): { segments: CommandSegment[]; unsafe: boolean } {
+  const segments: CommandSegment[] = [];
+  let current: CommandSegment = { tokens: [], raw: '' };
   let token = '';
   let hasToken = false;
   let unsafe = false;
+  // Where the current segment's source text starts: just past the last separator.
+  let start = 0;
 
   const endToken = () => {
     if (hasToken) {
@@ -49,10 +53,12 @@ function parseSegments(command: string): { segments: Segment[]; unsafe: boolean 
       hasToken = false;
     }
   };
-  const endSegment = () => {
+  const endSegment = (end: number) => {
     endToken();
-    if (current.tokens.length > 0) segments.push(current);
-    current = { tokens: [] };
+    if (current.tokens.length > 0) {
+      segments.push({ ...current, raw: command.slice(start, end).replace(/\s+/g, ' ').trim() });
+    }
+    current = { tokens: [], raw: '' };
   };
 
   for (let i = 0; i < command.length; i++) {
@@ -93,13 +99,16 @@ function parseSegments(command: string): { segments: Segment[]; unsafe: boolean 
     }
 
     if (char === ';' || char === '\n') {
-      endSegment();
+      endSegment(i);
+      start = i + 1;
       continue;
     }
 
     if (char === '|' || char === '&') {
+      const first = i;
       if (command[i + 1] === char) i++; // || or &&
-      endSegment();
+      endSegment(first);
+      start = i + 1;
       continue;
     }
 
@@ -145,7 +154,8 @@ function parseSegments(command: string): { segments: Segment[]; unsafe: boolean 
     }
 
     if (char === '#' && !hasToken) {
-      // Comment: ignore the rest of the line.
+      // Comment: the segment ends here; the rest of the line is ignored.
+      endSegment(i);
       const nl = command.indexOf('\n', i);
       if (nl === -1) break;
       i = nl - 1;
@@ -160,7 +170,7 @@ function parseSegments(command: string): { segments: Segment[]; unsafe: boolean 
     token += char;
     hasToken = true;
   }
-  endSegment();
+  endSegment(command.length);
 
   return { segments, unsafe };
 }

@@ -1,4 +1,7 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { AIMessageChunk } from '@langchain/core/messages';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { AgentEvent } from './loop.js';
@@ -68,6 +71,19 @@ const fakeTool: AgentTool = {
     return { output: 'ok', diff: '+added-line' };
   },
 };
+
+// The loop reads the permission rules from the config on every tool call:
+// keep it away from the developer's ~/.transcode.json.
+let configDir: string;
+beforeEach(() => {
+  configDir = mkdtempSync(path.join(tmpdir(), 'transcode-loop-test-'));
+  process.env.TRANSCODE_CONFIG_PATH = path.join(configDir, 'config.json');
+  writeFileSync(process.env.TRANSCODE_CONFIG_PATH, '{}');
+});
+afterEach(() => {
+  delete process.env.TRANSCODE_CONFIG_PATH;
+  rmSync(configDir, { recursive: true, force: true });
+});
 
 describe('runAgentLoop', () => {
   test('tool_result events carry the diff produced by the tool', async () => {

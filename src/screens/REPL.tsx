@@ -37,8 +37,9 @@ import {
 import { VERSION } from '../version.js';
 import { runAgentLoop, type PermissionRequest } from '../agent/loop.js';
 import { withPlanMode } from '../agent/system-prompt.js';
-import { createToolSession } from '../agent/tools/index.js';
+import { AGENT_TOOL_NAMES, createToolSession } from '../agent/tools/index.js';
 import { getPermissionMode, nextPermissionMode, setPermissionMode, subscribePermissionMode, type PermissionMode } from '../agent/permission.js';
+import { invalidRulesWarning, loadPermissionRules, rememberAlways } from '../agent/permission-rules.js';
 import {
   buildSessionRecord,
   generateTitle,
@@ -374,6 +375,15 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // Miswritten permission rules are ignored; say so once on startup.
+  useEffect(() => {
+    const warning = invalidRulesWarning(loadPermissionRules(AGENT_TOOL_NAMES));
+    if (warning) {
+      addHistory({ input: '', output: warning });
+      dragFlush();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // The terminal is ours while the REPL is mounted. Ink has taken
   // console.* over by the time this effect runs; wrap what is in place so
   // LangChain's per-chunk merge warnings cannot flood the screen.
@@ -651,6 +661,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
           messages: loopMessages,
           systemPrompt,
           planMode,
+          permissionMode: getPermissionMode(),
           ...(turnBudget.enabled && turnBudget.tokens > 0
             ? { contextTokens: turnBudget.tokens }
             : {}),
@@ -673,7 +684,13 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
               lastWasTool = true;
             } else if (event.type === 'tool_result') {
               const title = titlesById.get(event.toolCallId) ?? event.name;
-              const marker = event.skippedPermission ? ' ✓ (read-only)' : event.ok ? ' ✓' : ' ✗';
+              const marker = event.skippedPermission
+                ? ' ✓ (read-only)'
+                : event.allowedBy
+                  ? ` ✓ (allowed: ${event.allowedBy})`
+                  : event.ok
+                    ? ' ✓'
+                    : ' ✗';
               recordCall(stats, event.name, event.ok);
               setLiveTool(prev =>
                 prev ? { ...prev, ok: stats.ok, fail: stats.fail } : prev,
@@ -1396,6 +1413,16 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
         pendingPermissionRef.current?.resolve(true);
         return;
       }
+      if (ch === 'a' || ch === 'A') {
+        // Offered only when the mode caused the question: a remembered rule
+        // ranks below a configured `ask` rule, so "always" would do nothing there.
+        const pending = pendingPermissionRef.current;
+        if (pending?.request.alwaysRule) {
+          rememberAlways({ name: pending.request.name, input: pending.request.input }, process.cwd(), 'allow');
+          pending.resolve(true);
+        }
+        return;
+      }
       if (ch === 'n' || ch === 'N') {
         pendingPermissionRef.current?.resolve(false);
         return;
@@ -1760,12 +1787,13 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
   // Live-region tail window: keep the interactive frame shorter than the
   // terminal or Ink falls back to clearing + repainting everything.
   // Wrapped-row budget (review finding: Ink counts folded screen rows, so
-  // logical-line budgets blow on long CJK/diff lines): rows-13 with wide
-  // chars measured at 2 columns, columns-2 for paddingX. The 13 counts the
-  // fixed rows around the tail (turn echo, input box + mode indicator, …).
+  // logical-line budgets blow on long CJK/diff lines): rows-15 with wide
+  // chars measured at 2 columns, columns-2 for paddingX. The 15 counts the
+  // fixed rows around the tail (turn echo, the three-line permission
+  // question, input box + mode indicator, …).
   const liveTail = sliceLiveTail(
     chat.liveOutput,
-    (stdout?.rows ?? 24) - 13,
+    (stdout?.rows ?? 24) - 15,
     (stdout?.columns ?? 80) - 2,
   );
 
@@ -1863,10 +1891,15 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       )}
 
       {phase === 'permission' && pendingPermissionRef.current && (
-        <Box marginLeft={2}>
+        <Box marginLeft={2} flexDirection="column">
           <Text color="yellow">
-            ⚙ {pendingPermissionRef.current.request.title} ({pendingPermissionRef.current.request.kind}) — allow? y/n
+            ⚙ {pendingPermissionRef.current.request.title} ({pendingPermissionRef.current.request.kind}) — allow?
           </Text>
+          <Text color="yellow">  y  允许这一次</Text>
+          {pendingPermissionRef.current.request.alwaysRule && (
+            <Text color="yellow">  a  本会话总是允许  {pendingPermissionRef.current.request.alwaysRule}</Text>
+          )}
+          <Text color="yellow">  n  拒绝</Text>
         </Box>
       )}
 

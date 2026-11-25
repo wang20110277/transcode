@@ -27,6 +27,8 @@ export interface TranscodeConfig {
   autoCompact?: boolean | AutoCompactConfig;
   /** Web search vendor + key (user-configured; validated by normalizeWebSearchConfig). */
   webSearch?: unknown;
+  /** Permission rules by effect; each entry is `tool` or `tool(object)`. See agent/permission-rules.ts. */
+  permissions?: { allow?: string[]; ask?: string[]; deny?: string[] };
 }
 
 /** Raw (on-disk) shape of the autoUpdate config block. */
