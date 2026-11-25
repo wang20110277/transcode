@@ -97,6 +97,15 @@ describe('session store', () => {
     expect(getSession('ses_test1')?.title).toBe('分区存储');
   });
 
+  test('a Windows cwd is stored under a directory name Windows accepts', () => {
+    // A colon in a name is the drive, not a legal part of a directory:
+    // "C:-Users-…" makes mkdir fail with ENOENT, so no session could ever be saved.
+    saveSession({ ...sample('分区存储', 'x'), cwd: 'C:\\Users\\user\\Downloads\\freeswitch' });
+
+    expect(existsSync(path.join(dir, 'C--Users-user-Downloads-freeswitch', 'ses_test1.json'))).toBe(true);
+    expect(getSession('ses_test1')?.cwd).toBe('C:\\Users\\user\\Downloads\\freeswitch');
+  });
+
   test('lists sessions from multiple project directories together', () => {
     saveSession({ ...sample('对话 A', 'a'), id: 'ses_a', cwd: '/tmp/proj-a' });
     saveSession({ ...sample('对话 B', 'b'), id: 'ses_b', cwd: '/tmp/proj-b' });

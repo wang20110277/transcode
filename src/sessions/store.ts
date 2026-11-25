@@ -36,8 +36,12 @@ interface StoredMessage {
 const sessionsDir = (): string =>
   process.env.TRANSCODE_SESSIONS_DIR ?? path.join(homedir(), '.transcode', 'sessions');
 
-/** Project subdirectory name (Claude Code style: "/a/b" -> "-a-b"). */
-const projectDir = (cwd: string): string => cwd.split(path.sep).join('-');
+/**
+ * Project subdirectory name (Claude Code style: "/a/b" -> "-a-b",
+ * "C:\Users\x" -> "C--Users-x"). The drive's colon goes with the separators:
+ * it is not a legal part of a Windows directory name, and mkdir fails on it.
+ */
+const projectDir = (cwd: string): string => cwd.replace(/[\\/:]/g, '-');
 
 /** Fresh conversation id: bare UUID v4, like Claude Code session files. */
 export function newSessionId(): string {
