@@ -5,9 +5,11 @@ import path from 'node:path';
 import {
   autoUpdateNotice,
   isDevInstall,
+  npmCommandLine,
   npmSpawnSpec,
   planAutoUpdate,
   startAutoUpdate,
+  startNpm,
 } from './upgrade.js';
 
 let configDir: string | undefined;
@@ -64,6 +66,102 @@ describe('npmSpawnSpec', () => {
     expect(npmSpawnSpec('darwin')).toEqual({ command: 'npm', shell: false });
     expect(npmSpawnSpec('linux')).toEqual({ command: 'npm', shell: false });
   });
+});
+
+describe('npm through a shell', () => {
+  test('the shell gets one command line, built from the arguments', () => {
+    expect(
+      npmCommandLine('npm.cmd', ['view', '@trans-ai/trans-code@latest', 'version', '--registry=https://registry.npmjs.org']),
+    ).toBe('npm.cmd view @trans-ai/trans-code@latest version --registry=https://registry.npmjs.org');
+  });
+
+  test('nothing is started when an argument is not a bare word', () => {
+    expect(startNpm(['i', '-g', '@trans-ai/trans-code@1.0.0 & calc'], ['ignore', 'pipe', 'pipe'], {
+      command: 'npm.cmd',
+      shell: true,
+    })).toBeNull();
+  });
+
+  test('an argument the shell could take apart is refused, never escaped', () => {
+    // Versions, tags, flags and URLs are bare words; everything here would
+    // let the shell split, expand or chain the line.
+    const hostile = [
+      '1.0.0 & calc', '1.0.0 | more', '1.0.0; x', '1.0.0 beta', '1.0.0\tnext', '"1.0.0"', "1.0.0'",
+      '$HOME', '`x`', '(x)', '^1.0.0', '%PATH%', 'a>b', 'a<b', 'a\nb', 'a\\b', '--flag=a b',
+    ];
+    for (const arg of hostile) {
+      expect(npmCommandLine('npm.cmd', ['i', '-g', `@trans-ai/trans-code@${arg}`])).toBeNull();
+    }
+    // An empty argument is no word either. (Appended to the package name it
+    // would read as a valid bare word, so it gets its own check.)
+    expect(npmCommandLine('npm.cmd', ['i', '-g', ''])).toBeNull();
+  });
+
+  test('every argument npm is run with is a bare word, so the checks above refuse nothing in practice', () => {
+    const registry = '--registry=https://registry.npmjs.org';
+    for (const args of [
+      ['root', '-g'],
+      ['view', '@trans-ai/trans-code@latest', 'version', registry],
+      ['i', '-g', '@trans-ai/trans-code@latest', registry],
+      ['i', '-g', '@trans-ai/trans-code@0.12.13', registry],
+      ['i', '-g', '@trans-ai/trans-code@1.0.0-beta.1', registry],
+    ]) {
+      expect(npmCommandLine('npm.cmd', args)).not.toBeNull();
+    }
+  });
+
+  test(
+    'running npm through a shell raises no deprecation on Node',
+    async () => {
+      // The warning is Node's (DEP0190: an args array with shell: true), and
+      // the shipped CLI runs on Node — so build for Node and run it there,
+      // on the path Windows takes but with the unix npm.
+      const dir = mkdtempSync(path.join(tmpdir(), 'transcode-dep0190-test-'));
+      try {
+        const outfile = path.join(dir, 'upgrade.mjs');
+        const built = await Bun.build({
+          entrypoints: [path.join(import.meta.dir, 'upgrade.ts')],
+          target: 'node',
+          packages: 'external',
+        });
+        expect(built.success).toBe(true);
+        expect(built.outputs).toHaveLength(1);
+        // This Bun keeps the artifact in memory: write it out for Node to import.
+        writeFileSync(outfile, await built.outputs[0]!.text());
+
+        const runner = path.join(dir, 'runner.mjs');
+        writeFileSync(
+          runner,
+          [
+            `import { startNpm } from ${JSON.stringify(outfile)};`,
+            "const child = startNpm(['--version'], ['ignore', 'pipe', 'pipe'], { command: 'npm', shell: true });",
+            "if (!child) { console.error('REFUSED'); process.exit(3); }",
+            "let out = '';",
+            "child.stdout.on('data', (d) => { out += d; });",
+            "child.on('error', (e) => { console.error(String(e)); process.exit(2); });",
+            "child.on('close', (code) => { process.stdout.write(out); process.exit(code ?? 1); });",
+            '',
+          ].join('\n'),
+        );
+
+        const { spawnSync } = await import('node:child_process');
+        // Strip bun-test-injected vars: a child `node <file>` need not see them.
+        const cleanEnv: Record<string, string> = {};
+        for (const [key, value] of Object.entries(process.env)) {
+          if (value !== undefined && !key.startsWith('BUN_')) cleanEnv[key] = value;
+        }
+        const result = spawnSync('node', [runner], { timeout: 20_000, encoding: 'utf8', env: cleanEnv });
+        if (result.error) throw new Error(`node could not be started: ${result.error.message}`);
+
+        expect(result.stderr).not.toContain('DEP0190');
+        expect(`status=${result.status}\n${result.stderr.slice(0, 300)}`).toBe('status=0\n');
+        expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+    30_000,
+  );
 });
 
 describe('autoUpdateNotice / startAutoUpdate', () => {

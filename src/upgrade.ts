@@ -1,12 +1,17 @@
-import { spawn } from 'node:child_process';
+import {
+  spawn,
+  type ChildProcess,
+  type ChildProcessWithoutNullStreams,
+  type StdioOptions,
+} from 'node:child_process';
 
 /**
  * How to invoke npm on this platform. On unix npm is a real executable;
  * on Windows it is npm.cmd, and Node (CVE-2024-27980 hardening) refuses
  * to spawn .cmd/.bat without a shell — plain spawn('npm') dies with
  * ENOENT, so every upgrade / auto-update check silently no-ops on
- * Windows. Args are fixed constants (no spaces / cmd metacharacters),
- * so shell:true is safe here.
+ * Windows. With a shell npm gets ONE command line (startNpm), never an
+ * args array.
  */
 export function npmSpawnSpec(
   platform: NodeJS.Platform = process.platform,
@@ -14,6 +19,47 @@ export function npmSpawnSpec(
   return platform === 'win32'
     ? { command: 'npm.cmd', shell: true }
     : { command: 'npm', shell: false };
+}
+
+/** Characters a bare word is made of: versions, tags, package names, flags and URLs. */
+const BARE_WORD = /^[\w@./:=+-]+$/;
+
+/**
+ * The one command line a shell runs npm with. Node deprecates an args array
+ * together with `shell: true` (DEP0190), because the shell would get the
+ * arguments concatenated without escaping. So the line is built here, and
+ * only from bare words — no whitespace, quotes or shell metacharacters.
+ * Anything else is refused (null), never escaped: an upgrade target comes
+ * from the command line or the config, and must not be able to chain a
+ * second command on Windows.
+ */
+export function npmCommandLine(command: string, args: readonly string[]): string | null {
+  return args.every((arg) => BARE_WORD.test(arg)) ? [command, ...args].join(' ') : null;
+}
+
+/**
+ * Starts npm for the sh* helpers. Without a shell the arguments are passed as
+ * they are; with one npm gets a single command line, and nothing is started
+ * at all when an argument is not a bare word (null).
+ */
+export function startNpm(
+  args: string[],
+  stdio: ['ignore', 'pipe', 'pipe'] | ['ignore', 'pipe', 'inherit'],
+  spec?: { command: string; shell: boolean },
+): ChildProcessWithoutNullStreams | null;
+export function startNpm(
+  args: string[],
+  stdio: 'inherit',
+  spec?: { command: string; shell: boolean },
+): ChildProcess | null;
+export function startNpm(
+  args: string[],
+  stdio: StdioOptions,
+  spec: { command: string; shell: boolean } = npmSpawnSpec(),
+): ChildProcess | null {
+  if (!spec.shell) return spawn(spec.command, args, { stdio, shell: false });
+  const line = npmCommandLine(spec.command, args);
+  return line === null ? null : spawn(line, { stdio, shell: true });
 }
 import { realpathSync } from 'node:fs';
 import { readFileSync } from 'node:fs';
@@ -93,8 +139,8 @@ export function isDevInstall(entryPath: string, npmRoot: string): boolean {
  */
 function shQuiet(cmd: string, args: string[]): Promise<{ code: number; stdout: string }> {
   return new Promise(resolve => {
-    const { command, shell } = npmSpawnSpec();
-    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], shell });
+    const child = startNpm(args, ['ignore', 'pipe', 'pipe']);
+    if (!child) return resolve({ code: 1, stdout: '' });
     let settled = false;
     const settle = (code: number, stdout: string) => {
       if (settled) return;
@@ -208,10 +254,16 @@ function writeLastCheck(): void {
   }
 }
 
+const REFUSED = (cmd: string): string =>
+  `[transcode] did not run ${cmd}: an argument has spaces or characters a shell would take apart.\n`;
+
 function sh(cmd: string, args: string[]): Promise<{ code: number; stdout: string }> {
   return new Promise(resolve => {
-    const { command, shell } = npmSpawnSpec();
-    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'inherit'], shell });
+    const child = startNpm(args, ['ignore', 'pipe', 'inherit']);
+    if (!child) {
+      process.stderr.write(REFUSED(cmd));
+      return resolve({ code: 1, stdout: '' });
+    }
     let stdout = '';
     child.stdout.on('data', (d: Buffer) => {
       stdout += d.toString();
@@ -226,8 +278,12 @@ function sh(cmd: string, args: string[]): Promise<{ code: number; stdout: string
 
 function shInherit(cmd: string, args: string[]): Promise<number> {
   return new Promise(resolve => {
-    const { command, shell } = npmSpawnSpec();
-    const child = spawn(command, args, { stdio: 'inherit', shell });
+    const child = startNpm(args, 'inherit');
+    if (!child) {
+      process.stderr.write(REFUSED(cmd));
+      resolve(1);
+      return;
+    }
     child.on('error', err => {
       process.stderr.write(`[transcode] failed to run ${cmd}: ${err.message}\n`);
       resolve(1);
