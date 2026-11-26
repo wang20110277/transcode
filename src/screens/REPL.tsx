@@ -70,6 +70,7 @@ import { quietLibraryNoise } from '../provider/library-noise.js';
 import { renderDiff } from './diff-render.js';
 import { createTurnStats, recordCall, renderCollapsed, shouldCollapse, summaryLine } from './turn-summary.js';
 import { sliceLiveTail } from './live-view.js';
+import { clearScreen } from './clear-screen.js';
 import { expansionTitle, latestFoldedIndex, NOTHING_FOLDED, stepFoldedIndex, windowedDetail } from './expansion.js';
 import { buildSystemPrompt, INIT_PROMPT, loadProjectContext } from '../agent/system-prompt.js';
 import { HumanMessage, SystemMessage, type BaseMessage } from '@langchain/core/messages';
@@ -145,6 +146,12 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
   // commits flashes one duplicated tail frame (spec ruling #6).
   interface ChatView {
     history: HistoryEntry[];
+    /**
+     * Changes exactly when the history is replaced wholesale (/clear). It is
+     * the key of <Static>, which then mounts afresh and prints its items
+     * again — so it has to change in the same update as the history.
+     */
+    generation: number;
     liveOutput: string;
     /** Input echo shown at the top of the live region while a turn runs. */
     turnInput: string;
@@ -156,6 +163,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
   const [chat, setChat] = useState<ChatView>(() => ({
     // Banner prints once as the first static item (spec ruling #3).
     history: bannerEntry ? [bannerEntry] : [],
+    generation: 0,
     liveOutput: '',
     turnInput: '',
   }));
@@ -494,6 +502,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
         entry.output ?? `${entry.prefix ?? ''}${liveOutputRef.current}${entry.suffix ?? ''}`;
       liveOutputRef.current = '';
       setChat(prev => ({
+        ...prev,
         history: [...prev.history, { input: entry.input, output, hiddenLines: entry.hiddenLines }],
         liveOutput: '',
         turnInput: '',
@@ -1037,6 +1046,15 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
     ],
   );
 
+  /** Forgets the conversation in progress: what the model is handed next starts empty. */
+  const startNewConversation = useCallback(() => {
+    conversationRef.current = null;
+    conversationTitleRef.current = '';
+    summaryRef.current = null;
+    messagesRef.current = [];
+    toolSessionRef.current = createToolSession(process.cwd());
+  }, []);
+
   const handleSubmit = useCallback(async (raw: string) => {
     // Bare Enter is a no-op except at the apikey prompt, where it means
     // "reuse the saved key" (the prompt's 回车沿用 hint).
@@ -1123,11 +1141,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
     }
 
     if (cmdName === 'new') {
-      conversationRef.current = null;
-      conversationTitleRef.current = '';
-      summaryRef.current = null;
-      messagesRef.current = [];
-      toolSessionRef.current = createToolSession(process.cwd());
+      startNewConversation();
       addHistory({ input: trimmed, output: '已开始新对话。' });
       commitInput('');
       setHistoryIndex(-1);
@@ -1295,16 +1309,25 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       }
 
       if (cmdName === 'clear') {
-        ctx.clearHistory();
+        // A new conversation on a clean screen, with the banner back at the
+        // top as if the app had just started. The screen is scrolled into
+        // the terminal's scrollback first, so the earlier conversation can
+        // still be read by scrolling up.
+        startNewConversation();
         setExpansion(null);
-        setChat(prev => ({ ...prev, history: bannerEntryRef.current ? [bannerEntryRef.current] : [] }));
-        // Static output cannot be un-printed: /clear starts a fresh
-        // transcript below (scrollback keeps the old one). The confirmation
-        // lands in a SEPARATE commit — same-batch clear+append gets
-        // swallowed by Static's length-based diff (probe-verified).
-        setTimeout(() => {
-          addHistory({ input: '', output: '已开始新对话。(旧内容保留在终端滚动缓冲中)' });
-        }, 0);
+        // Written before the repaint below, so the cursor is at the top of
+        // an empty screen when Ink prints into it.
+        stdout?.write(clearScreen(stdout?.rows ?? 24));
+        const banner = bannerEntryRef.current;
+        // Printed history is append-only: nothing in it can be taken back.
+        // /clear replaces it and mounts <Static> afresh in the SAME update,
+        // so the fresh mount prints the new items, from the top. In a render
+        // of its own, the new mount would first print the old transcript.
+        setChat(prev => ({
+          ...prev,
+          generation: prev.generation + 1,
+          history: [...(banner ? [banner] : []), { input: '', output: '已开始新对话。' }],
+        }));
       } else if (result.output) {
         addHistory({ input: trimmed, output: result.output });
       }
@@ -1324,7 +1347,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
     commitInput('');
     setHistoryIndex(-1);
     setSavedInput('');
-  }, [exit, ctx, phase, handleApiKey, addHistory, enterModelSelect, commitInput, dragFlush, runChat]);
+  }, [exit, ctx, phase, handleApiKey, addHistory, enterModelSelect, commitInput, dragFlush, runChat, startNewConversation]);
   // Late-bound so runChat's finally can auto-continue queued prompts.
   handleSubmitRef.current = handleSubmit;
 
@@ -1885,7 +1908,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
 
   return (
     <Box flexDirection="column" paddingX={1}>
-      <Static items={chat.history}>
+      <Static key={chat.generation} items={chat.history}>
         {(entry, i) => (
           <Box key={i} flexDirection="column">
             {entry.input && (

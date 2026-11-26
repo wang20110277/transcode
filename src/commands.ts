@@ -243,7 +243,7 @@ const commands: Command[] = [
   },
   {
     name: 'clear',
-    description: 'Clear screen',
+    description: 'Clear the screen and start a new conversation',
     execute: (_args, ctx) => {
       ctx.clearHistory();
       return { output: '' };
