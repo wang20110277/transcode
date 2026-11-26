@@ -65,7 +65,7 @@ import { createStreamThrottler } from './stream-throttle.js';
 import { historyRule } from './history-rule.js';
 import { listWindow } from './list-window.js';
 import { fuzzyFilter } from './fuzzy-filter.js';
-import { BANNER_GREEN } from './banner.js';
+import { BRAND_GREEN } from './banner.js';
 import { quietLibraryNoise } from '../provider/library-noise.js';
 import { renderDiff } from './diff-render.js';
 import { createTurnStats, recordCall, renderCollapsed, shouldCollapse, summaryLine } from './turn-summary.js';
@@ -1883,7 +1883,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
                 <Text color="gray" dimColor>{historyRule(stdout?.columns ?? 80)}</Text>
                 <Box>
                   <Text color="green" bold>&gt; </Text>
-                  <Text color="cyan" bold>{entry.input}</Text>
+                  <Text color={BRAND_GREEN} bold>{entry.input}</Text>
                 </Box>
                 <Text color="gray" dimColor>{historyRule(stdout?.columns ?? 80)}</Text>
               </Box>
@@ -1895,7 +1895,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
             )}
             {entry.banner ? (
               <Box flexDirection="column" marginBottom={1}>
-                <Text color={BANNER_GREEN} bold>{entry.banner.logo}</Text>
+                <Text color={BRAND_GREEN} bold>{entry.banner.logo}</Text>
                 <Box marginTop={1}>
                   <Text color="green" bold>Trans Code</Text>
                   <Text> v{VERSION}</Text>
@@ -1922,7 +1922,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
           <Text color="gray" dimColor>{historyRule(stdout?.columns ?? 80)}</Text>
           <Box>
             <Text color="green" bold>&gt; </Text>
-            <Text color="cyan" bold>{chat.turnInput}</Text>
+            <Text color={BRAND_GREEN} bold>{chat.turnInput}</Text>
           </Box>
           <Text color="gray" dimColor>{historyRule(stdout?.columns ?? 80)}</Text>
         </Box>

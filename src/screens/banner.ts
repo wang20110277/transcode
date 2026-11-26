@@ -15,5 +15,8 @@ export function bannerLines(title: string, padding = 2): string {
  */
 export const BANNER_TITLE = 'T R A N S C O D E  |  Multi-Model Agent';
 
-/** Colour of the logo box: the green of the brand mark (the swoosh in trans.jpg). */
-export const BANNER_GREEN = '#0cbe66';
+/**
+ * The brand green, sampled from the swoosh in trans.jpg: the colour of the
+ * logo box and of what the user typed in the transcript.
+ */
+export const BRAND_GREEN = '#0cbe66';
