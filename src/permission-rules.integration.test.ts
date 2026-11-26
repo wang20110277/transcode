@@ -21,6 +21,15 @@ import { AcpSession } from './acp/session.js';
 import type { AcpPermissionRequest } from './acp/protocol.js';
 
 /**
+ * A test that mounts the REPL and waits for real turns. bun stops a test
+ * after 5s by default; while the whole suite runs in parallel a turn can
+ * take ten times longer than alone (2026-11-26: one that takes 0.45s alone
+ * passed 4.5s under full load), so these get more room than that.
+ */
+const TURN_TEST_TIMEOUT_MS = 20_000;
+const turnTest = (name: string, run: () => Promise<void>) => test(name, run, TURN_TEST_TIMEOUT_MS);
+
+/**
  * Permission rules where they bite: first in the agent loop. A scripted
  * model replaces createModel for the whole file, because mock.module is
  * process-wide: everything that needs it lives here and the real exports
@@ -102,8 +111,12 @@ const writeConfig = (config: Record<string, unknown>): void => {
 
 const settle = (ms = 100): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Polls until the condition holds; a timeout lets the caller's assertion report the stale frame. */
-async function until(check: () => boolean, ms = 4000): Promise<void> {
+/**
+ * Polls until the condition holds; a timeout lets the caller's assertion
+ * report the stale frame. A turn can take longer than a few seconds while
+ * the whole suite runs (2026-11-26: one missed a 4s limit at full load).
+ */
+async function until(check: () => boolean, ms = 8000): Promise<void> {
   const end = Date.now() + ms;
   while (Date.now() < end) {
     if (check()) return;
@@ -242,7 +255,7 @@ describe('permission rules in the agent loop', () => {
   const version = { tool: 'bash', args: '{"command":"bun --version"}' };
   const npmTest = { tool: 'bash', args: '{"command":"npm test"}' };
 
-  test('an allow rule spares the question and is reported on the tool result', async () => {
+  turnTest('an allow rule spares the question and is reported on the tool result', async () => {
     writeConfig({ permissions: { allow: ['bash(bun --version)'] } });
 
     const { asks, results } = await replay([version]);
@@ -252,7 +265,7 @@ describe('permission rules in the agent loop', () => {
     expect(results[0]!.allowedBy).toBe('bash(bun --version)');
   });
 
-  test('a deny rule refuses the call without asking and names the rule', async () => {
+  turnTest('a deny rule refuses the call without asking and names the rule', async () => {
     writeConfig({ permissions: { deny: ['bash(bun --version)'] } });
 
     const { asks, results } = await replay([version]);
@@ -262,7 +275,7 @@ describe('permission rules in the agent loop', () => {
     expect(results[0]!.output).toContain('Permission denied by rule "bash(bun --version)".');
   });
 
-  test('an ask rule asks even for a read-only command, and offers no "always"', async () => {
+  turnTest('an ask rule asks even for a read-only command, and offers no "always"', async () => {
     writeConfig({ permissions: { ask: ['bash(echo hi)'] } });
 
     const { asks, results } = await replay([{ tool: 'bash', args: '{"command":"echo hi"}' }], { answer: true });
@@ -273,7 +286,7 @@ describe('permission rules in the agent loop', () => {
     expect(results[0]!.output).toContain('hi');
   });
 
-  test('a question caused by the mode carries the rule "always" would remember', async () => {
+  turnTest('a question caused by the mode carries the rule "always" would remember', async () => {
     const { asks, results } = await replay([npmTest], { answer: false });
 
     expect(asks).toHaveLength(1);
@@ -281,7 +294,7 @@ describe('permission rules in the agent loop', () => {
     expect(results[0]!.output).toBe('Permission denied by the client.');
   });
 
-  test('a rule remembered in this session spares the next question', async () => {
+  turnTest('a rule remembered in this session spares the next question', async () => {
     rememberAlways({ name: 'bash', input: { command: 'bun --version' } }, root, 'allow');
 
     const { asks, results } = await replay([version], { answer: false });
@@ -290,7 +303,7 @@ describe('permission rules in the agent loop', () => {
     expect(results[0]!.allowedBy).toBe('bash(bun --version)');
   });
 
-  test('the readonly and plan modes outrank allow rules', async () => {
+  turnTest('the readonly and plan modes outrank allow rules', async () => {
     writeConfig({ permissions: { allow: ['bash(bun --version)'] } });
 
     const readonly = await replay([version], { mode: 'readonly' });
@@ -302,7 +315,7 @@ describe('permission rules in the agent loop', () => {
     expect(plan.results[0]!.output).toBe(PLAN_DENIAL);
   });
 
-  test('the mode reaches sub-agents: in auto mode a sub-agent command is not asked about', async () => {
+  turnTest('the mode reaches sub-agents: in auto mode a sub-agent command is not asked about', async () => {
     writeConfig({ routing: { research: 'stub' } });
     const dispatch = {
       tool: 'dispatch_agent',
@@ -338,7 +351,7 @@ describe('permission answers over ACP', () => {
     return { requests, result };
   }
 
-  test('"allow_always" is offered and remembered: the next call of the same kind is not asked about', async () => {
+  turnTest('"allow_always" is offered and remembered: the next call of the same kind is not asked about', async () => {
     const { requests, result } = await promptWith('allow_always');
 
     expect(result.stopReason).toBe('end_turn');
@@ -348,7 +361,7 @@ describe('permission answers over ACP', () => {
     expect(memories()).toEqual(['probe-one', 'probe-two']);
   });
 
-  test('"reject_always" is remembered as a deny: the next call of the same kind is refused without asking', async () => {
+  turnTest('"reject_always" is remembered as a deny: the next call of the same kind is refused without asking', async () => {
     const { requests } = await promptWith('reject_always');
 
     expect(requests).toHaveLength(1);
@@ -356,7 +369,7 @@ describe('permission answers over ACP', () => {
     expect(memories()).toEqual([]);
   });
 
-  test('"allow_once" behaves as before: every call is asked about and nothing is remembered', async () => {
+  turnTest('"allow_once" behaves as before: every call is asked about and nothing is remembered', async () => {
     const { requests } = await promptWith('allow_once');
 
     expect(requests).toHaveLength(2);
@@ -364,7 +377,7 @@ describe('permission answers over ACP', () => {
     expect(memories()).toEqual(['probe-one', 'probe-two']);
   });
 
-  test('a question forced by a configured ask rule offers no "always"', async () => {
+  turnTest('a question forced by a configured ask rule offers no "always"', async () => {
     writeConfig({ permissions: { ask: ['bash(npm test*)'] } });
 
     const { requests } = await promptWith('reject_once', 'SCRIPT_BASH');
@@ -380,7 +393,7 @@ describe('the permission question in the REPL', () => {
   const memories = (): string[] =>
     ['probe-one', 'probe-two'].filter((name) => existsSync(path.join(root, 'user', 'memory', `${name}.md`)));
 
-  test('the question offers once / always / reject, and "always" spares the next call of the same kind', async () => {
+  turnTest('the question offers once / always / reject, and "always" spares the next call of the same kind', async () => {
     const instance = await mount();
     await submit(instance, 'SCRIPT_SAVE');
     await until(() => frame(instance).includes('allow?'));
@@ -397,7 +410,8 @@ describe('the permission question in the REPL', () => {
     expect(getSessionRules().map((rule) => rule.text)).toEqual(['memory_save']);
     expect(memories()).toEqual(['probe-one', 'probe-two']);
   });
-  test('a key that arrives the moment the question appears is handled by the new state, not the one before it', async () => {
+
+  turnTest('a key that arrives the moment the question appears is handled by the new state, not the one before it', async () => {
     const instance = await mount();
     // Ink binds the key handler in an effect, which React runs only after
     // the frame is drawn. Press the key inside the frame's own write, where
@@ -417,9 +431,9 @@ describe('the permission question in the REPL', () => {
 
     expect(pressed).toBe(true);
     expect(getSessionRules().map((rule) => rule.text)).toEqual(['memory_save']);
-  }, 20_000);
+  });
 
-  test('"n" refuses once and remembers nothing; Enter still allows once', async () => {
+  turnTest('"n" refuses once and remembers nothing; Enter still allows once', async () => {
     const instance = await mount();
     await submit(instance, 'SCRIPT_SAVE');
     await until(() => frame(instance).includes('memory_save probe-one'));
@@ -432,7 +446,7 @@ describe('the permission question in the REPL', () => {
     expect(getSessionRules()).toEqual([]);
   });
 
-  test('the rule offered for "always" is the one derived by category', async () => {
+  turnTest('the rule offered for "always" is the one derived by category', async () => {
     const instance = await mount();
     await submit(instance, 'SCRIPT_BASH');
     await until(() => frame(instance).includes('allow?'));
@@ -449,7 +463,7 @@ describe('the permission question in the REPL', () => {
     expect(getSessionRules()).toEqual([]);
   });
 
-  test('a question forced by a configured ask rule has no "always" line', async () => {
+  turnTest('a question forced by a configured ask rule has no "always" line', async () => {
     writeConfig({ permissions: { ask: ['bash(npm test*)'] } });
     const instance = await mount();
     await submit(instance, 'SCRIPT_BASH');
@@ -462,7 +476,7 @@ describe('the permission question in the REPL', () => {
     await until(() => frame(instance).includes('scripted reply'));
   });
 
-  test('a call allowed by a rule asks nothing and leaves a marker naming the rule', async () => {
+  turnTest('a call allowed by a rule asks nothing and leaves a marker naming the rule', async () => {
     writeConfig({ permissions: { allow: ['bash(bun --version)'] } });
     const instance = await mount();
     await submit(instance, 'SCRIPT_VERSION');
@@ -475,7 +489,7 @@ describe('the permission question in the REPL', () => {
 });
 
 describe('the startup warning', () => {
-  test('miswritten configured rules are reported once on startup', async () => {
+  turnTest('miswritten configured rules are reported once on startup', async () => {
     writeConfig({ permissions: { allow: ['typo('] } });
     const instance = await mount();
     await until(() => frame(instance).includes('⚠ 1 条权限规则写错了'));
@@ -486,7 +500,7 @@ describe('the startup warning', () => {
 });
 
 describe('/permissions', () => {
-  test('lists the mode, the configured rules, miswritten rules and the rules of this session', async () => {
+  turnTest('lists the mode, the configured rules, miswritten rules and the rules of this session', async () => {
     writeConfig({ permissions: { allow: ['bash(npm test*)'], deny: ['bash('] } });
     rememberAlways({ name: 'bash', input: { command: 'ls' } }, root, 'allow');
 
@@ -500,14 +514,14 @@ describe('/permissions', () => {
     expect(text).toContain('  allow  bash(ls)');
   });
 
-  test('/help lists it', async () => {
+  turnTest('/help lists it', async () => {
     const instance = await mount();
     await submit(instance, '/help');
     await until(() => frame(instance).includes('/permissions'));
     expect(frame(instance)).toContain('/permissions');
   });
 
-  test('/permissions clear forgets the rules of this session and says how many', async () => {
+  turnTest('/permissions clear forgets the rules of this session and says how many', async () => {
     rememberAlways({ name: 'bash', input: { command: 'ls' } }, root, 'allow');
 
     const instance = await mount();

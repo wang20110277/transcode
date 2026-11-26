@@ -7,6 +7,15 @@ import path from 'node:path';
 import { AIMessageChunk, type BaseMessage } from '@langchain/core/messages';
 
 /**
+ * A test that mounts the REPL and waits for real turns. bun stops a test
+ * after 5s by default; while the whole suite runs in parallel a turn can
+ * take ten times longer than alone (2026-11-26: one that takes 0.45s alone
+ * passed 4.5s under full load), so these get more room than that.
+ */
+const TURN_TEST_TIMEOUT_MS = 20_000;
+const turnTest = (name: string, run: () => Promise<void>) => test(name, run, TURN_TEST_TIMEOUT_MS);
+
+/**
  * The ctrl+o panel in the REPL. Printed history never changes, so the detail
  * of a folded turn is shown in the live region, where it can open and close.
  * A scripted model replaces createModel for the whole file: mock.module is
@@ -178,7 +187,7 @@ const openPanel = async (instance: ReturnType<typeof render>): Promise<void> => 
 };
 
 describe('the ctrl+o detail panel', () => {
-  test('opens the latest folded turn and closes on the next press, adding nothing to the transcript', async () => {
+  turnTest('opens the latest folded turn and closes on the next press, adding nothing to the transcript', async () => {
     const instance = await mount();
     await runTurn(instance, 'FOLD_A');
     const closed = frame(instance);
@@ -195,7 +204,7 @@ describe('the ctrl+o detail panel', () => {
     expect(frame(instance)).toBe(closed);
   });
 
-  test('the same folded turn can be opened again and again', async () => {
+  turnTest('the same folded turn can be opened again and again', async () => {
     const instance = await mount();
     await runTurn(instance, 'FOLD_A');
     for (let i = 0; i < 2; i++) {
@@ -206,7 +215,7 @@ describe('the ctrl+o detail panel', () => {
     }
   });
 
-  test('the arrows move between folded turns and stop at the ends', async () => {
+  turnTest('the arrows move between folded turns and stop at the ends', async () => {
     const instance = await mount();
     await runTurn(instance, 'FOLD_A');
     await runTurn(instance, 'FOLD_B');
@@ -229,7 +238,7 @@ describe('the ctrl+o detail panel', () => {
     for (const line of readsOf('FOLD_B')) expect(frame(instance)).toContain(line);
   });
 
-  test('Esc closes the panel instead of leaving the app', async () => {
+  turnTest('Esc closes the panel instead of leaving the app', async () => {
     const instance = await mount();
     await runTurn(instance, 'FOLD_A');
     await openPanel(instance);
@@ -239,7 +248,7 @@ describe('the ctrl+o detail panel', () => {
     expect(frame(instance)).toContain('mode: ask'); // still at the prompt
   });
 
-  test('a new turn closes the panel', async () => {
+  turnTest('a new turn closes the panel', async () => {
     const instance = await mount();
     await runTurn(instance, 'FOLD_A');
     await openPanel(instance);
@@ -248,7 +257,7 @@ describe('the ctrl+o detail panel', () => {
     expect(frame(instance)).not.toContain(PANEL_TITLE);
   });
 
-  test('/clear closes the panel', async () => {
+  turnTest('/clear closes the panel', async () => {
     const instance = await mount();
     await runTurn(instance, 'FOLD_A');
     await openPanel(instance);
@@ -258,7 +267,7 @@ describe('the ctrl+o detail panel', () => {
     expect(frame(instance)).not.toContain(PANEL_TITLE);
   });
 
-  test('with nothing folded, ctrl+o says so, and the next key dismisses it and keeps its meaning', async () => {
+  turnTest('with nothing folded, ctrl+o says so, and the next key dismisses it and keeps its meaning', async () => {
     const instance = await mount();
     await press(instance, CTRL_O);
     await until(() => frame(instance).includes('没有折叠的回合。'));
