@@ -397,6 +397,27 @@ describe('the permission question in the REPL', () => {
     expect(getSessionRules().map((rule) => rule.text)).toEqual(['memory_save']);
     expect(memories()).toEqual(['probe-one', 'probe-two']);
   });
+  test('a key that arrives the moment the question appears is handled by the new state, not the one before it', async () => {
+    const instance = await mount();
+    // Ink binds the key handler in an effect, which React runs only after
+    // the frame is drawn. Press the key inside the frame's own write, where
+    // no effect can have run yet: what a fast hand or a paste looks like,
+    // and what happens routinely when the machine is under load.
+    const write = instance.stdout.write.bind(instance.stdout);
+    let pressed = false;
+    instance.stdout.write = ((chunk: string) => {
+      write(chunk);
+      if (!pressed && chunk.includes('allow?')) {
+        pressed = true;
+        instance.stdin.write('a');
+      }
+    }) as typeof instance.stdout.write;
+    await submit(instance, 'SCRIPT_SAVE');
+    await until(() => frame(instance).includes('scripted reply'));
+
+    expect(pressed).toBe(true);
+    expect(getSessionRules().map((rule) => rule.text)).toEqual(['memory_save']);
+  }, 20_000);
 
   test('"n" refuses once and remembers nothing; Enter still allows once', async () => {
     const instance = await mount();

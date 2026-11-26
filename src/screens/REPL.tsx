@@ -1328,7 +1328,15 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
   // Late-bound so runChat's finally can auto-continue queued prompts.
   handleSubmitRef.current = handleSubmit;
 
-  useInput((ch, key) => {
+  // Ink binds the key handler in an effect, which React runs only after the
+  // frame is drawn — and late, when the machine is busy. A key that arrives
+  // in between (a fast hand, a paste) reached the handler of the state
+  // BEFORE a prompt or picker appeared, and was taken as plain input. So the
+  // listener Ink binds never changes: it calls the newest handler, which is
+  // stored as the component renders and is therefore in step with the frame.
+  type KeyHandler = Parameters<typeof useInput>[0];
+  const keyHandlerRef = useRef<KeyHandler>(() => {});
+  keyHandlerRef.current = (ch, key) => {
     if (process.env.TRANSCODE_DEBUG_KEYS === '1') {
       // eslint-disable-next-line no-console
       console.error(`CB ${JSON.stringify(ch)} ret=${key.return} esc=${key.escape}`);
@@ -1808,7 +1816,9 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
     if (ch && !key.ctrl && !key.meta) {
       commitInput(inputRef.current + ch);
     }
-  });
+  };
+  const forwardKey = useCallback<KeyHandler>((ch, key) => keyHandlerRef.current(ch, key), []);
+  useInput(forwardKey, {});
 
   // Live-region tail window: keep the interactive frame shorter than the
   // terminal or Ink falls back to clearing + repainting everything.
