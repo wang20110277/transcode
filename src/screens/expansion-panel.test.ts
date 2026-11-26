@@ -263,7 +263,8 @@ describe('the ctrl+o detail panel', () => {
     await openPanel(instance);
 
     await submit(instance, '/clear');
-    await until(() => frame(instance).includes('已开始新对话'));
+    await until(() => frame(instance).includes('\x1b[2J'));
+    await settle(300);
     expect(frame(instance)).not.toContain(PANEL_TITLE);
   });
 

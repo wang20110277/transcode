@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { AIMessageChunk, type BaseMessage } from '@langchain/core/messages';
+import { registerApiKey, saveCustomProfile } from '../provider/provider.js';
 
 /**
  * A test that mounts the REPL and waits for real turns. bun stops a test
@@ -92,12 +93,15 @@ beforeEach(() => {
   process.env.TRANSCODE_SESSIONS_DIR = path.join(root, 'sessions');
   process.env.TRANSCODE_USER_DIR = path.join(root, 'user');
   delete process.env.TRANSCODE_PERMISSION_MODE;
+  // A model switch through /models: skip its connectivity check (no network in tests).
+  process.env.TRANSCODE_SKIP_MODEL_CHECK = '1';
   seen.length = 0;
 });
 
 afterEach(() => {
   for (const instance of mounted.splice(0)) instance.unmount();
   for (const name of DIR_OVERRIDES) delete process.env[name];
+  delete process.env.TRANSCODE_SKIP_MODEL_CHECK;
   for (const name of ISOLATED_ENV) {
     if (savedEnv[name] === undefined) delete process.env[name];
     else process.env[name] = savedEnv[name];
@@ -124,85 +128,136 @@ const frame = (instance: ReturnType<typeof render>): string =>
 const writtenSince = (instance: ReturnType<typeof render>, from: number): string[] =>
   instance.stdout.frames.slice(from);
 
-async function mount(): Promise<ReturnType<typeof render>> {
+type Instance = ReturnType<typeof render>;
+
+/** What the app hands the REPL: the model in use, in the context and in the banner. */
+function propsFor(modelId: string, setModelId: (id: string) => void) {
+  return {
+    ctx: { modelId, setModelId },
+    banner: { logo: 'LOGO', model: modelId, dir: '/tmp' },
+  };
+}
+
+/**
+ * Mounts the REPL the way the app does — including what happens on a model
+ * switch: the app re-renders with the new model in the context and in the
+ * banner.
+ */
+async function mount(): Promise<Instance> {
   const { default: REPL } = await import('./REPL.js');
-  const instance = render(
-    React.createElement(REPL, {
-      ctx: { modelId: 'stub', setModelId: () => {} },
-      banner: { logo: 'LOGO', model: 'stub', dir: '/tmp' },
-    }),
-  );
+  let current = 'stub';
+  let instance!: Instance;
+  const setModelId = (id: string) => {
+    current = id;
+    instance.rerender(React.createElement(REPL, propsFor(current, setModelId)));
+  };
+  instance = render(React.createElement(REPL, propsFor(current, setModelId)));
   mounted.push(instance);
   await settle();
   return instance;
 }
 
 /** Types text, lets the handlers see it, then presses Enter (a burst would hit the slash popup). */
-async function submit(instance: ReturnType<typeof render>, text: string): Promise<void> {
+async function submit(instance: Instance, text: string): Promise<void> {
   for (const ch of text) instance.stdin.write(ch);
   await settle(40);
   instance.stdin.write('\r');
 }
 
+/** One key, then a frame: handlers see state one render late. */
+async function pressKey(instance: Instance, key: string): Promise<void> {
+  instance.stdin.write(key);
+  await settle(150);
+}
+
 /** Runs one turn to the end and lets it land in the printed history. */
-async function runTurn(instance: ReturnType<typeof render>, text: string): Promise<void> {
+async function runTurn(instance: Instance, text: string): Promise<void> {
   await submit(instance, text);
   await until(() => frame(instance).includes(`reply to ${text}`));
   await settle(300);
 }
 
+/**
+ * Switches to the saved gateway `alpha` through /models: the vendor list
+ * (the cursor starts on the first vendor) → Up wraps to custom → the entry
+ * is under the cursor → Enter opens its key prompt → Enter reuses the saved key.
+ */
+async function switchToAlpha(instance: Instance): Promise<void> {
+  registerApiKey(saveCustomProfile({ baseUrl: 'https://a.example/v1', model: 'alpha' }), 'k');
+  await submit(instance, '/models');
+  await settle(150);
+  await pressKey(instance, '\x1b[A');
+  await pressKey(instance, '\r');
+  await pressKey(instance, '\r');
+  await pressKey(instance, '\r');
+  await until(() => frame(instance).includes('已切换到 alpha'));
+  await settle(300);
+}
+
+/** Waits for /clear to have cleared the screen and printed the banner again. */
+async function cleared(instance: Instance): Promise<void> {
+  await until(() => frame(instance).split('LOGO').length - 1 === 2);
+  await settle(200);
+}
+
 /** The /clear escape, as written to the terminal: the screen scrolled away, then cleared. */
 const CLEAR_WRITE = /^\n+\x1b\[2J\x1b\[H$/;
 
+const occurrences = (text: string, part: string): number => text.split(part).length - 1;
+
 describe('/clear', () => {
-  turnTest('starts a new conversation: the model is handed none of the earlier turns', async () => {
+  turnTest('clears the screen and prints the banner again at the top', async () => {
+    const instance = await mount();
+    await runTurn(instance, 'first question');
+    const before = instance.stdout.frames.length;
+    expect(occurrences(frame(instance), 'LOGO')).toBe(1);
+
+    await submit(instance, '/clear');
+    await cleared(instance);
+
+    const written = writtenSince(instance, before);
+    expect(written.findIndex((chunk) => CLEAR_WRITE.test(chunk))).toBeGreaterThanOrEqual(0);
+    // The banner is printed again, once — and nothing else is said.
+    expect(written.some((chunk) => chunk.includes('\x1b[2J') && chunk.includes('LOGO'))).toBe(false);
+    expect(occurrences(frame(instance), 'LOGO')).toBe(2);
+    expect(frame(instance)).not.toContain('已开始新对话');
+  });
+
+  turnTest('clears the screen only: the conversation goes on', async () => {
     const instance = await mount();
     await runTurn(instance, 'first question');
     seen.length = 0;
 
     await submit(instance, '/clear');
-    await until(() => frame(instance).includes('已开始新对话。'));
-    await settle(200);
+    await cleared(instance);
     await runTurn(instance, 'second question');
 
     expect(seen).toHaveLength(1);
     expect(seen[0]).toContain('second question');
-    expect(seen[0]).not.toContain('first question');
-    expect(seen[0]).not.toContain('reply to first question');
+    expect(seen[0]).toContain('first question');
+    expect(seen[0]).toContain('reply to first question');
   });
 
-  turnTest('clears the screen and prints the banner again at the top', async () => {
+  turnTest('prints the banner for the model in use, not the one from startup', async () => {
     const instance = await mount();
-    await runTurn(instance, 'first question');
-    const before = instance.stdout.frames.length;
-    expect(frame(instance).split('LOGO').length - 1).toBe(1);
+    await switchToAlpha(instance);
+    expect(occurrences(frame(instance), 'Model: alpha')).toBe(1);
+    expect(occurrences(frame(instance), 'Model: stub')).toBe(1);
 
     await submit(instance, '/clear');
-    await until(() => frame(instance).includes('已开始新对话。'));
-    await settle(200);
+    await cleared(instance);
 
-    const written = writtenSince(instance, before);
-    const clearAt = written.findIndex((chunk) => CLEAR_WRITE.test(chunk));
-    expect(clearAt).toBeGreaterThanOrEqual(0);
-    // The banner is printed again, and the confirmation comes with it.
-    const afterClear = written.slice(clearAt + 1).find((chunk) => chunk.includes('LOGO'));
-    expect(afterClear).toContain('已开始新对话。');
-    expect(afterClear.indexOf('LOGO')).toBeLessThan(afterClear.indexOf('已开始新对话。'));
-    // Exactly once: the reseeded history is the banner and the one line.
-    expect(frame(instance).split('LOGO').length - 1).toBe(2);
-    expect(frame(instance).split('已开始新对话。').length - 1).toBe(1);
+    expect(occurrences(frame(instance), 'Model: alpha')).toBe(2);
+    expect(occurrences(frame(instance), 'Model: stub')).toBe(1);
   });
 
-  turnTest('also forgets the earlier input when the arrow keys browse back through it', async () => {
+  turnTest('forgets the earlier input when the arrow keys browse back through it', async () => {
     const instance = await mount();
     await runTurn(instance, 'first question');
     await submit(instance, '/clear');
-    await until(() => frame(instance).includes('已开始新对话。'));
-    await settle(200);
+    await cleared(instance);
 
-    await settle(150);
-    instance.stdin.write('\x1b[A'); // up: the previous input
-    await settle(200);
+    await pressKey(instance, '\x1b[A'); // up: the previous input
 
     expect(frame(instance)).not.toContain('> first question▎');
     expect(frame(instance)).toContain('> ▎');
@@ -214,12 +269,19 @@ describe('/new', () => {
     const instance = await mount();
     await runTurn(instance, 'first question');
     const before = instance.stdout.frames.length;
+    seen.length = 0;
 
     await submit(instance, '/new');
     await until(() => frame(instance).includes('已开始新对话。'));
 
     expect(writtenSince(instance, before).some((chunk) => chunk.includes('\x1b[2J'))).toBe(false);
     // The old turn was not replaced by a banner: the banner is still printed once.
-    expect(frame(instance).split('LOGO').length - 1).toBe(1);
+    expect(occurrences(frame(instance), 'LOGO')).toBe(1);
+    expect(seen).toHaveLength(0); // no turn was run by the command
+
+    await runTurn(instance, 'second question');
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain('second question');
+    expect(seen[0]).not.toContain('first question');
   });
 });

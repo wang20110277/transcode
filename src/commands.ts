@@ -242,7 +242,7 @@ const commands: Command[] = [
   },
   {
     name: 'clear',
-    description: 'Clear the screen and start a new conversation',
+    description: 'Clear the screen (the conversation goes on)',
     // Intercepted by the REPL, which resets the conversation, clears the
     // screen and prints the banner again. Registering it is all this does.
     execute: () => ({ output: '' }),

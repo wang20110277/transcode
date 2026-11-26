@@ -156,10 +156,12 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
     /** Input echo shown at the top of the live region while a turn runs. */
     turnInput: string;
   }
+  // The banner for the model in use right now. /clear prints it again, so it
+  // must be read from the current prop, never from a copy kept at mount: the
+  // model may have been switched since.
   const bannerEntry = banner
     ? { input: '', output: '', banner }
     : null;
-  const bannerEntryRef = useRef(bannerEntry);
   const [chat, setChat] = useState<ChatView>(() => ({
     // Banner prints once as the first static item (spec ruling #3).
     history: bannerEntry ? [bannerEntry] : [],
@@ -1309,24 +1311,22 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       }
 
       if (cmdName === 'clear') {
-        // A new conversation on a clean screen, with the banner back at the
-        // top as if the app had just started. The screen is scrolled into
-        // the terminal's scrollback first, so the earlier conversation can
-        // still be read by scrolling up.
-        startNewConversation();
+        // A clean screen with the banner back at the top. Only the screen is
+        // cleared: the conversation itself goes on (that is /new's job).
+        // The screen is scrolled into the terminal's scrollback first, so the
+        // earlier turns can still be read by scrolling up.
         setExpansion(null);
         // Written before the repaint below, so the cursor is at the top of
         // an empty screen when Ink prints into it.
         stdout?.write(clearScreen(stdout?.rows ?? 24));
-        const banner = bannerEntryRef.current;
         // Printed history is append-only: nothing in it can be taken back.
         // /clear replaces it and mounts <Static> afresh in the SAME update,
-        // so the fresh mount prints the new items, from the top. In a render
-        // of its own, the new mount would first print the old transcript.
+        // so the fresh mount prints the banner again, from the top. In a
+        // render of its own, the new mount would first print the old transcript.
         setChat(prev => ({
           ...prev,
           generation: prev.generation + 1,
-          history: [...(banner ? [banner] : []), { input: '', output: '已开始新对话。' }],
+          history: bannerEntry ? [bannerEntry] : [],
         }));
       } else if (result.output) {
         addHistory({ input: trimmed, output: result.output });
@@ -1347,7 +1347,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
     commitInput('');
     setHistoryIndex(-1);
     setSavedInput('');
-  }, [exit, ctx, phase, handleApiKey, addHistory, enterModelSelect, commitInput, dragFlush, runChat, startNewConversation]);
+  }, [exit, ctx, phase, handleApiKey, addHistory, enterModelSelect, commitInput, dragFlush, runChat, startNewConversation, bannerEntry]);
   // Late-bound so runChat's finally can auto-continue queued prompts.
   handleSubmitRef.current = handleSubmit;
 
