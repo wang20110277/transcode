@@ -123,7 +123,7 @@ type Instance = ReturnType<typeof render>;
 function mount(setModelId: (id: string) => void = () => {}, modelId: string = 'stub'): Instance {
   const instance = render(
     React.createElement(REPL, {
-      ctx: { modelId, setModelId, clearHistory: () => {} },
+      ctx: { modelId, setModelId },
       banner: { logo: 'LOGO', model: 'stub', dir: '/tmp' },
     }),
   );

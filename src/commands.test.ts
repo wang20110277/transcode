@@ -30,7 +30,7 @@ describe('mode command', () => {
 
   test('bare /mode names every mode and says what plan does', async () => {
     const mode = findCommand('mode')!;
-    const result = await mode.execute([], { modelId: 'deepseek', setModelId: () => {}, clearHistory: () => {} });
+    const result = await mode.execute([], { modelId: 'deepseek', setModelId: () => {} });
     for (const name of ['ask', 'readonly', 'plan', 'auto']) expect(result.output).toContain(name);
     expect(result.output).toMatch(/plan[^,]*implementation plan/);
     // /help prints the description: plan belongs in the list there too.
@@ -39,7 +39,7 @@ describe('mode command', () => {
 
   test('/mode <x> switches the runtime mode silently (empty output lands nothing in the transcript)', async () => {
     const mode = findCommand('mode')!;
-    const ctx = { modelId: 'deepseek', setModelId: () => {}, clearHistory: () => {} };
+    const ctx = { modelId: 'deepseek', setModelId: () => {} };
     const first = await mode.execute(['auto'], ctx);
     expect(getPermissionMode()).toBe('auto');
     expect(first.output).toBe('');
@@ -53,14 +53,14 @@ describe('mode command', () => {
 
   test('/mode bogus reports the valid modes without switching', async () => {
     const mode = findCommand('mode')!;
-    const result = await mode.execute(['bogus'], { modelId: 'deepseek', setModelId: () => {}, clearHistory: () => {} });
+    const result = await mode.execute(['bogus'], { modelId: 'deepseek', setModelId: () => {} });
     expect(result.output).toContain('Unknown mode');
     expect(getPermissionMode()).toBe('ask');
   });
 });
 
 describe('memory commands', () => {
-  const ctx = { modelId: 'deepseek', setModelId: () => {}, clearHistory: () => {} };
+  const ctx = { modelId: 'deepseek', setModelId: () => {} };
 
   async function withMemoryRoot(run: () => Promise<void>): Promise<void> {
     const { mkdtempSync, promises: fs, rmSync } = await import('node:fs');
@@ -147,7 +147,7 @@ describe('executeCommand error containment', () => {
         throw new Error('EACCES: permission denied');
       },
     };
-    const result = await executeCommand(boom, [], { modelId: 'deepseek', setModelId: () => {}, clearHistory: () => {} });
+    const result = await executeCommand(boom, [], { modelId: 'deepseek', setModelId: () => {} });
     expect(result.output).toContain('Command failed');
     expect(result.output).toContain('EACCES');
   });

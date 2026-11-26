@@ -25,7 +25,6 @@ export interface CommandContext {
   /** Registry id (deepseek) or provider:model spec (deepseek:deepseek-reasoner). */
   modelId: string;
   setModelId: (id: string) => void;
-  clearHistory: () => void;
 }
 
 export interface CommandResult {
@@ -244,10 +243,9 @@ const commands: Command[] = [
   {
     name: 'clear',
     description: 'Clear the screen and start a new conversation',
-    execute: (_args, ctx) => {
-      ctx.clearHistory();
-      return { output: '' };
-    },
+    // Intercepted by the REPL, which resets the conversation, clears the
+    // screen and prints the banner again. Registering it is all this does.
+    execute: () => ({ output: '' }),
   },
   {
     name: 'exit',

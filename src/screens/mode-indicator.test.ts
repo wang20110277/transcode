@@ -26,7 +26,7 @@ function plain(frame: string): string {
 function mount(): ReturnType<typeof render> {
   const instance = render(
     React.createElement(REPL, {
-      ctx: { modelId: 'stub', setModelId: () => {}, clearHistory: () => {} },
+      ctx: { modelId: 'stub', setModelId: () => {} },
       banner: { logo: 'LOGO', model: 'stub', dir: '/tmp' },
     }),
   );

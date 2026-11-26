@@ -114,7 +114,7 @@ describe('streaming in the REPL', () => {
     };
     const instance = render(
       React.createElement(REPL, {
-        ctx: { modelId: 'custom', setModelId: () => {}, clearHistory: () => {} },
+        ctx: { modelId: 'custom', setModelId: () => {} },
         banner: { logo: 'LOGO', model: 'stub', dir: '/tmp' },
       }),
     );
