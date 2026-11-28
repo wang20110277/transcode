@@ -387,3 +387,19 @@ describe('审查修复:易用性补丁', () => {
     }
   });
 });
+
+describe('gw1:MODEL 经 ACP 全链路(spec 验收)', () => {
+  test('session/new 直接接受 gw1:model-a 并建会话', async () => {
+    writeFileSync(
+      process.env.TRANSCODE_CONFIG_PATH!,
+      JSON.stringify({ profiles: { gw1: { baseUrl: 'http://gw1/v1', model: 'mb' } } }),
+    );
+    const server = makeServer();
+    const frame = await server.call('session/new', { cwd: workspaceA, model: 'gw1:model-a' });
+    expect(frame.error).toBeUndefined();
+    expect((frame.result as { sessionId: string }).sessionId).toBeTruthy();
+    expect((frame.result as { models: { currentModelId: string } }).models.currentModelId).toBe(
+      'gw1:model-a',
+    );
+  });
+});

@@ -952,9 +952,12 @@ async function fetchEndpointModels(baseUrl: string, apiKey?: string): Promise<st
       fetch(`${baseUrl}/models`, {
         headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
       }),
-      new Promise<Response>((_, reject) =>
-        setTimeout(() => reject(new Error('timeout')), 5_000),
-      ),
+      new Promise<Response>((_, reject) => {
+        // unref: the losing timer must not keep the CLI process alive for
+        // 5s after its output is already printed (verifyModel precedent).
+        const timer = setTimeout(() => reject(new Error('timeout')), 5_000);
+        timer.unref?.();
+      }),
     ]);
     if (!response.ok) return [];
     const body = (await response.json()) as { data?: Array<{ id?: string }> };
