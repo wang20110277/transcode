@@ -181,3 +181,30 @@ describe('deletedGatewayNote', () => {
     );
   });
 });
+
+describe('validateModelSpec', () => {
+  test('合法拼法:注册表 id、前缀 spec、空白视为未提供', async () => {
+    const { validateModelSpec } = await import('./provider.js');
+    expect(validateModelSpec('glmc')).toBeNull();
+    expect(validateModelSpec('glmc:glm-5.3-flash')).toBeNull();
+    expect(validateModelSpec('opus')).toBeNull();
+    expect(validateModelSpec('openai:gpt-4o')).toBeNull();
+    expect(validateModelSpec('  ')).toBeNull();
+  });
+
+  test('非法拼法返回含 invalid model 的消息', async () => {
+    const { validateModelSpec } = await import('./provider.js');
+    expect(validateModelSpec('glmz:x')).toContain('invalid model');
+    expect(validateModelSpec('nope')).toContain('invalid model');
+  });
+
+  test('用户 profile 名合法', async () => {
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(
+      process.env.TRANSCODE_CONFIG_PATH!,
+      JSON.stringify({ profiles: { mygw: { baseUrl: 'http://x', model: 'm' } } }),
+    );
+    const { validateModelSpec } = await import('./provider.js');
+    expect(validateModelSpec('mygw')).toBeNull();
+  });
+});

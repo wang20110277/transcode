@@ -178,6 +178,28 @@ export function getAvailableModels(): { id: ModelId; name: string }[] {
 }
 
 /**
+ * Prefix-level model spec validation for hosts (session/new): a registry
+ * id, a user profile name, or `known-prefix:model`. The model name after
+ * the colon is NOT validated — vendor catalogs drift, and the typo that
+ * silently falls back to the default model is at the prefix/name level.
+ * Returns null when usable, an error message otherwise.
+ */
+export function validateModelSpec(spec: string): string | null {
+  const raw = spec.trim();
+  if (!raw) return null; // blank = not provided; caller uses its default
+  const colon = raw.indexOf(':');
+  if (colon <= 0) {
+    const known =
+      raw in MODEL_REGISTRY || loadConfig().profiles?.[raw] !== undefined;
+    return known ? null : `invalid model id: ${raw}(可用模型见 agent/models)`;
+  }
+  const prefix = raw.slice(0, colon).toLowerCase();
+  const knownPrefix =
+    prefix in MODEL_REGISTRY || prefix in PROVIDER_DEFAULTS || prefix in SPEC_PREFIX;
+  return knownPrefix ? null : `invalid model id: ${raw}(可用模型见 agent/models)`;
+}
+
+/**
  * The header's "Model:" line: a registry id reads as its name (opus →
  * "Claude Opus"); a vendor:model spec or a saved gateway's name is shown as is.
  */

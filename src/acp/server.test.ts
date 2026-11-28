@@ -33,16 +33,21 @@ afterEach(() => {
 });
 
 /** 内存 JSON-RPC 客户端:写行到 input,按 id 配对读 output。 */
-function makeServer(): { call: (method: string, params?: unknown) => Promise<Frame> } {
+function makeServer(): {
+  call: (method: string, params?: unknown) => Promise<Frame>;
+  outputText: () => string;
+} {
   const input = new PassThrough();
   const output = new PassThrough();
   new AcpServer(new JsonRpcTransport(input, output));
 
   let buffer = '';
+  let allOutput = '';
   let nextId = 1;
   const pending = new Map<number, { resolve: (frame: Frame) => void }>();
   output.setEncoding('utf8');
   output.on('data', (chunk: string) => {
+    allOutput += chunk;
     buffer += chunk;
     let newline = buffer.indexOf('\n');
     while (newline >= 0) {
@@ -65,6 +70,7 @@ function makeServer(): { call: (method: string, params?: unknown) => Promise<Fra
       input.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
       return promise;
     },
+    outputText: () => allOutput,
   };
 }
 
@@ -125,6 +131,38 @@ describe('session/list 与 session/close', () => {
 
     const reloaded = await server.call('session/load', { sessionId: created.sessionId });
     expect((reloaded.result as { sessionId: string }).sessionId).toBe(created.sessionId);
+  });
+});
+
+describe('session/new 模型校验与 error: stderr 约定', () => {
+  test('无效 model → invalidParams + error: 行只进 stderr', async () => {
+    const server = makeServer();
+    const writes: string[] = [];
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    (process.stderr as unknown as { write: (chunk: unknown) => boolean }).write = (chunk) => {
+      writes.push(String(chunk));
+      return true;
+    };
+    try {
+      const frame = await server.call('session/new', { cwd: workspaceA, model: 'glmz:x' });
+      expect(frame.error?.code).toBe(-32602);
+      expect(frame.error?.message).toContain('invalid model id');
+      expect(
+        writes.some((line) => line.startsWith('error: ') && line.includes('invalid model id')),
+      ).toBe(true);
+      // stdout 是 JSON-RPC 通道,error: 行不得污染
+      expect(server.outputText()).not.toContain('error:');
+    } finally {
+      (process.stderr as unknown as { write: typeof process.stderr.write }).write = originalWrite;
+    }
+  });
+
+  test('空白 model 视为未提供;合法 spec 照常创建', async () => {
+    const server = makeServer();
+    const blank = await server.call('session/new', { cwd: workspaceA, model: '  ' });
+    expect((blank.result as { sessionId?: string }).sessionId).toBeTruthy();
+    const ok = await server.call('session/new', { cwd: workspaceA, model: 'glmc:glm-5.3-flash' });
+    expect((ok.result as { sessionId?: string }).sessionId).toBeTruthy();
   });
 });
 

@@ -5,6 +5,7 @@ import { getSession } from '../sessions/store.js';
 import { listProjectSessions } from '../sessions/resume.js';
 import { loadConfig } from '../config.js';
 import { webSearchConfigWarning } from '../provider/web-search.js';
+import { validateModelSpec } from '../provider/provider.js';
 import { invalidRulesNotice, loadPermissionRules } from '../agent/permission-rules.js';
 import { AGENT_TOOL_NAMES } from '../agent/tools/index.js';
 import { VERSION } from '../version.js';
@@ -68,6 +69,19 @@ export class AcpServer implements AcpSessionHost {
   }
 
   private async handleRequest(method: string, rawParams: unknown): Promise<unknown> {
+    try {
+      return await this.dispatchRequest(method, rawParams);
+    } catch (error) {
+      // Machine-readable host convention: failure-class events always leave
+      // one `error: <message>` line on stderr (stdout stays pure JSON-RPC).
+      const message = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`error: ${message}\n`);
+      if (error instanceof RpcError) throw error;
+      throw new RpcError(RPC_ERRORS.internalError, `${method}: ${message}`);
+    }
+  }
+
+  private async dispatchRequest(method: string, rawParams: unknown): Promise<unknown> {
     const params = asRecord(rawParams);
 
     switch (method) {
@@ -207,6 +221,13 @@ export class AcpServer implements AcpSessionHost {
     }
 
     const model = typeof params.model === 'string' ? params.model : undefined;
+    // A host's model picker must be honored exactly: reject unknown specs
+    // here instead of silently falling back to the default model (the UI
+    // would show A while B runs). Blank = not provided.
+    if (model && model.trim()) {
+      const problem = validateModelSpec(model);
+      if (problem) throw new RpcError(RPC_ERRORS.invalidParams, problem);
+    }
     const session = new AcpSession(this, cwd, model);
     this.sessions.set(session.id, session);
     process.stderr.write(
