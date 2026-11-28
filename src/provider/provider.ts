@@ -107,6 +107,17 @@ export function vendorModels(id: ModelId): string[] {
 }
 
 /**
+ * Neutral channel label for catalog names: registry names that assert a
+ * model family ("Claude Opus" also serving sonnet) would mislabel rows —
+ * those channels display their vendor instead.
+ */
+function channelLabel(id: ModelId): string {
+  if (id === 'opus') return 'Anthropic';
+  if (id === 'gpt') return 'OpenAI';
+  return MODEL_REGISTRY[id]?.name ?? id;
+}
+
+/**
  * The actionable model catalog for hosts and the CLI: concrete selectable
  * entries (glmc:glm-5.3-flash), not the vendor registry layer. Curated
  * vendor lists expand into specs; every saved custom gateway (profile or
@@ -121,7 +132,7 @@ export function getSelectableModels(): { modelId: string; name: string }[] {
     if (id === 'custom') continue;
     // Channels without a configured key never appear — in any path.
     if (!lookupApiKey(id)) continue;
-    const registryName = MODEL_REGISTRY[id]?.name ?? id;
+    const registryName = channelLabel(id);
     for (const model of vendorModels(id)) {
       const modelId = vendorModelSpec(id, model);
       if (!byId.has(modelId)) {
@@ -710,7 +721,7 @@ export async function fetchSelectableModelsLive(
     const key = lookupApiKey(id);
     if (!key) continue;
     const baseUrl = baseUrlFor(resolveModel(id))?.replace(/\/$/, '');
-    const registryName = MODEL_REGISTRY[id]?.name ?? id;
+    const registryName = channelLabel(id);
     jobs.push((async () => {
       let live: string[] = [];
       try {

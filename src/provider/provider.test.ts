@@ -447,3 +447,35 @@ describe('fetchSelectableModelsLive', () => {
     }
   });
 });
+
+describe('目录通道显示名(中性标签)', () => {
+  test('opus 通道的 sonnet 条目显示 Anthropic 前缀,不误标 Opus', async () => {
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(
+      process.env.TRANSCODE_CONFIG_PATH!,
+      JSON.stringify({ apiKeys: { opus: 'test-key' } }),
+    );
+    const { getSelectableModels } = await import('./provider.js');
+    const sonnet = getSelectableModels().find((m) => m.modelId === 'anthropic:claude-sonnet-4-20250514');
+    expect(sonnet).toBeDefined();
+    expect(sonnet!.name).toBe('Anthropic claude-sonnet-4-20250514');
+    const opusEntry = getSelectableModels().find((m) => m.modelId === 'anthropic:claude-opus-4-20250514');
+    expect(opusEntry!.name).toBe('Anthropic claude-opus-4-20250514');
+  });
+
+  test('glmc 标签不受影响;线上路径同规则', async () => {
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(
+      process.env.TRANSCODE_CONFIG_PATH!,
+      JSON.stringify({ apiKeys: { glmc: 'k', opus: 'k' } }),
+    );
+    const { getSelectableModels, fetchSelectableModelsLive } = await import('./provider.js');
+    expect(
+      getSelectableModels().find((m) => m.modelId === 'glmc:glm-5.3-flash')?.name,
+    ).toBe('GLM Coding Plan glm-5.3-flash');
+    const live = await fetchSelectableModelsLive(async () => ['claude-sonnet-4-20250514', 'claude-opus-4-20250514']);
+    expect(live.find((m) => m.modelId === 'anthropic:claude-sonnet-4-20250514')?.name).toBe(
+      'Anthropic claude-sonnet-4-20250514',
+    );
+  });
+});
