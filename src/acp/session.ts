@@ -71,7 +71,8 @@ function promptText(prompt: AcpPromptBlock[]): string {
 }
 
 export class AcpSession {
-  readonly id = `ses_${randomUUID()}`;
+  /** Fresh sessions get ses_<uuid>; fromRecord keeps the disk id. */
+  id = `ses_${randomUUID()}`;
   readonly messages: BaseMessage[] = [];
   private busy = false;
   private abortController?: AbortController;
@@ -96,6 +97,7 @@ export class AcpSession {
   /** Rebuilds a session from its disk record (session/load after restart). */
   static fromRecord(host: AcpSessionHost, record: SessionRecord): AcpSession {
     const session = new AcpSession(host, record.cwd, record.model);
+    session.id = record.id;
     session.messages.push(...record.messages);
     session.title = record.title;
     session.createdAt = record.createdAt;

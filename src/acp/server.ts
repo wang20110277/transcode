@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import { RPC_ERRORS, RpcError, JsonRpcTransport } from './transport.js';
 import { AcpSession, sessionCwd, sessionNewResult, type AcpSessionHost } from './session.js';
+import { getSession } from '../sessions/store.js';
 import { loadConfig } from '../config.js';
 import { webSearchConfigWarning } from '../provider/web-search.js';
 import { invalidRulesNotice, loadPermissionRules } from '../agent/permission-rules.js';
@@ -77,7 +78,7 @@ export class AcpServer implements AcpSessionHost {
           protocolVersion: 1,
           agentInfo: { name: 'transcode', version: VERSION },
           agentCapabilities: {
-            loadSession: false,
+            loadSession: true,
             promptCapabilities: {
               image: false,
               audio: false,
@@ -101,7 +102,18 @@ export class AcpServer implements AcpSessionHost {
       case 'session/load':
       case 'session/resume': {
         const sessionId = requireString(params, 'sessionId');
-        return sessionNewResult(this.getSession(sessionId));
+        const live = this.sessions.get(sessionId);
+        if (live) return sessionNewResult(live);
+        // Process restarted (or another host process wrote it): rebuild
+        // from the disk store. A missing or corrupt record is -32002 —
+        // readRecord swallows parse errors as "not found".
+        const record = getSession(sessionId);
+        if (!record) {
+          throw new RpcError(RPC_ERRORS.sessionNotFound, `Session not found: ${sessionId}`);
+        }
+        const session = AcpSession.fromRecord(this, record);
+        this.sessions.set(session.id, session);
+        return sessionNewResult(session);
       }
 
       case 'session/prompt': {
