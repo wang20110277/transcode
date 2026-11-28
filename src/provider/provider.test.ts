@@ -479,3 +479,20 @@ describe('目录通道显示名(中性标签)', () => {
     );
   });
 });
+
+describe('模型上下文长度后缀', () => {
+  test('已知模型按模型名匹配(跨前缀),未知不显示', async () => {
+    const { contextTokensFor, contextSuffix } = await import('./provider.js');
+    expect(contextTokensFor('glmc:glm-5.3')).toBe(1_000_000);
+    expect(contextTokensFor('glm:glm-5.3')).toBe(1_000_000);
+    expect(contextTokensFor('opus')).toBeUndefined();
+    expect(contextSuffix('glmc:glm-5.3')).toBe(' [1M]');
+    expect(contextSuffix('opus')).toBe('');
+  });
+
+  test('格式化:K 档与 1.5M 档', async () => {
+    const { contextSuffix } = await import('./provider.js');
+    expect(contextSuffix('glmc:glm-5.3')).toBe(' [1M]');
+    expect(contextSuffix('nope-unknown')).toBe('');
+  });
+});

@@ -254,6 +254,32 @@ export function modelLabel(id: string): string {
   return getAvailableModels().find(m => m.id === id)?.name ?? id;
 }
 
+/**
+ * Known context windows (tokens), keyed by model NAME (the part after any
+ * provider prefix) so glm:/glmc:/profile specs all match. Numbers we have
+ * verified only — unknown models display no suffix rather than a guess.
+ */
+const MODEL_CONTEXT_TOKENS: Record<string, number> = {
+  'glm-5.3': 1_000_000,
+};
+
+/** The selected model's real context window, when known. */
+export function contextTokensFor(specOrId: string): number | undefined {
+  const model = resolveModel(specOrId).model || specOrId;
+  return MODEL_CONTEXT_TOKENS[model];
+}
+
+/** Banner suffix like " [1M]" / " [200K]"; empty when unknown. */
+export function contextSuffix(specOrId: string): string {
+  const tokens = contextTokensFor(specOrId);
+  if (!tokens || tokens <= 0) return '';
+  if (tokens >= 1_000_000) {
+    const millions = tokens / 1_000_000;
+    return ` [${Number.isInteger(millions) ? millions : millions.toFixed(1)}M]`;
+  }
+  return ` [${Math.round(tokens / 1_000)}K]`;
+}
+
 export function getModelConfig(id: ModelId): ModelConfig {
   return MODEL_REGISTRY[id];
 }

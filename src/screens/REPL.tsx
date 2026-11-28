@@ -17,6 +17,7 @@ import {
   listCustomGateways,
   customProfileName,
   modelLabel,
+  contextSuffix,
   vendorModelSpec,
   vendorModels,
   verifyModel,
@@ -881,7 +882,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
         output: `${checkMessage} — ${switchNote(label, pickedModel, served)}`,
         // A printed header cannot change in place (Static prints each entry
         // once), so the switch prints it again for the model now in use.
-        banner: banner ? { ...banner, model: modelLabel(target) } : undefined,
+        banner: banner ? { ...banner, model: `${modelLabel(target)}${contextSuffix(target)}` } : undefined,
       });
       setPendingSpec(null);
       setPendingDisplayName('');

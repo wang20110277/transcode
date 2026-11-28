@@ -1,6 +1,6 @@
 import { render, Box, Text } from 'ink';
 import { useState } from 'react';
-import { envModelLabel, modelLabel, preferredModelId } from './provider/provider.js';
+import { contextSuffix, envModelLabel, modelLabel, preferredModelId } from './provider/provider.js';
 import { type CommandContext } from './commands.js';
 import REPL from './screens/REPL.js';
 import { BANNER_TITLE, bannerLines } from './screens/banner.js';
@@ -13,7 +13,7 @@ const DEFAULT_MODEL: string = preferredModelId() ?? 'opus';
 function bannerData(modelId: string, cwd: string, envLabel?: string) {
   return {
     logo: bannerLines(BANNER_TITLE),
-    model: envLabel ?? modelLabel(modelId),
+    model: `${envLabel ?? modelLabel(modelId)}${contextSuffix(modelId)}`,
     dir: cwd,
   };
 }
