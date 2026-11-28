@@ -222,7 +222,7 @@ OpenAI 兼容网关可以用 `OPENAI_BASE_URL` 覆盖 base URL；`TRANSCODE_BASE
 
 ## 宿主约定(机器可读诊断)
 
-- **错误行**:请求处理失败时 stderr 稳定输出一行 `error: <message>`(stdout 始终是纯 JSON-RPC 帧)。宿主可 grep `^error: ` 透传给用户。
+- **错误行**:运行性失败(模型/网关/密钥错误、意外异常)在 stderr 稳定输出一行 `error: <message>`;stdout 始终是纯 JSON-RPC 帧。协议层结果(session 未找到、方法不存在等)不产生 `error:` 行。宿主可 grep `^error: ` 透传给用户。
 - **信号退出**:SIGINT/SIGTERM 时 stderr 输出 `[transcode] <信号>: shutting down` 后尽快退出(退出码 0)。
 
 ## 调试

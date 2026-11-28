@@ -239,3 +239,80 @@ describe('shutdownNotice', () => {
     expect(shutdownNotice('SIGINT')).toBe('[transcode] SIGINT: shutting down\n');
   });
 });
+
+describe('审查修复:易用性补丁', () => {
+  test('set_model 同样校验,无效 id 报 invalidParams', async () => {
+    const server = makeServer();
+    const created = (await server.call('session/new', { cwd: workspaceA })).result as {
+      sessionId: string;
+    };
+    const bad = await server.call('session/set_model', {
+      sessionId: created.sessionId,
+      modelId: 'glmz:x',
+    });
+    expect(bad.error?.code).toBe(-32602);
+    const ok = await server.call('session/set_model', {
+      sessionId: created.sessionId,
+      modelId: 'glmc:glm-5.3-flash',
+    });
+    expect((ok.result as { models: unknown[] }).models).toBeTruthy();
+  });
+
+  test('空模型段(glgc:)在 session/new 即被拒', async () => {
+    const server = makeServer();
+    const frame = await server.call('session/new', { cwd: workspaceA, model: 'glmc:' });
+    expect(frame.error?.code).toBe(-32602);
+  });
+
+  test('例行协议未命中不再刷 error: 行', async () => {
+    const server = makeServer();
+    const writes: string[] = [];
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    (process.stderr as unknown as { write: (chunk: unknown) => boolean }).write = (chunk) => {
+      writes.push(String(chunk));
+      return true;
+    };
+    try {
+      await server.call('session/load', { sessionId: 'ses_missing' });
+      await server.call('no/such-method', {});
+    } finally {
+      (process.stderr as unknown as { write: typeof process.stderr.write }).write = originalWrite;
+    }
+    expect(writes.some((line) => line.startsWith('error: '))).toBe(false);
+  });
+
+  test('prompt 的运行性失败写 error: 行(provider 错误)', async () => {
+    delete process.env.TRANSCODE_MOCK; // 需要 createModel/网络路径真跑
+    // 确定性失败:profile 指向必拒端口,连接即刻 ECONNREFUSED
+    const configPath = path.join(sessionsDir, 'config.json');
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        profiles: { deadgw: { baseUrl: 'http://127.0.0.1:9/v1', model: 'x' } },
+      }),
+    );
+    process.env.TRANSCODE_CONFIG_PATH = configPath;
+    const server = makeServer();
+    const created = (await server.call('session/new', { cwd: workspaceA, model: 'deadgw' })).result as {
+      sessionId: string;
+    };
+    const writes: string[] = [];
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    (process.stderr as unknown as { write: (chunk: unknown) => boolean }).write = (chunk) => {
+      writes.push(String(chunk));
+      return true;
+    };
+    try {
+      const frame = await server.call('session/prompt', {
+        sessionId: created.sessionId,
+        prompt: [{ type: 'text', text: 'hi' }],
+      });
+      expect((frame.result as { stopReason: string }).stopReason).toBe('refusal');
+      expect(writes.some((line) => line.startsWith('error: '))).toBe(true);
+    } finally {
+      (process.stderr as unknown as { write: typeof process.stderr.write }).write = originalWrite;
+      process.env.TRANSCODE_MOCK = '1';
+      delete process.env.TRANSCODE_CONFIG_PATH;
+    }
+  });
+});

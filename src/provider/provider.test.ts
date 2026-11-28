@@ -208,3 +208,24 @@ describe('validateModelSpec', () => {
     expect(validateModelSpec('mygw')).toBeNull();
   });
 });
+
+describe('validateModelSpec 补充', () => {
+  test('冒号后模型段为空 → 拒绝', async () => {
+    const { validateModelSpec } = await import('./provider.js');
+    expect(validateModelSpec('glmc:')).toContain('invalid model');
+    expect(validateModelSpec('openai:   ')).toContain('invalid model');
+  });
+
+  test('与注册表同名的 profile 优先且通过校验(计划承诺的回归测试)', async () => {
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(
+      process.env.TRANSCODE_CONFIG_PATH!,
+      JSON.stringify({
+        profiles: { glmc: { baseUrl: 'http://my-gw', model: 'my-model' } },
+      }),
+    );
+    const { validateModelSpec, resolveModel } = await import('./provider.js');
+    expect(validateModelSpec('glmc')).toBeNull();
+    expect(resolveModel('glmc').model).toBe('my-model');
+  });
+});

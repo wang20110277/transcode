@@ -72,12 +72,14 @@ export class AcpServer implements AcpSessionHost {
     try {
       return await this.dispatchRequest(method, rawParams);
     } catch (error) {
-      // Machine-readable host convention: failure-class events always leave
-      // one `error: <message>` line on stderr (stdout stays pure JSON-RPC).
+      // RpcErrors are protocol outcomes (not-found, bad params, probing) —
+      // they answer the host and must NOT spam the `error: ` convention.
+      // Only operational failures (unexpected exceptions) log + wrap here;
+      // provider-level failures log in AcpSession.prompt's catch.
+      if (error instanceof RpcError) throw error;
       const message = error instanceof Error ? error.message : String(error);
       process.stderr.write(`error: ${message}\n`);
-      if (error instanceof RpcError) throw error;
-      throw new RpcError(RPC_ERRORS.internalError, `${method}: ${message}`);
+      throw new RpcError(RPC_ERRORS.internalError, message);
     }
   }
 
@@ -237,7 +239,10 @@ export class AcpServer implements AcpSessionHost {
     // would show A while B runs). Blank = not provided.
     if (model && model.trim()) {
       const problem = validateModelSpec(model);
-      if (problem) throw new RpcError(RPC_ERRORS.invalidParams, problem);
+      if (problem) {
+        process.stderr.write(`error: ${problem}\n`);
+        throw new RpcError(RPC_ERRORS.invalidParams, problem);
+      }
     }
     const session = new AcpSession(this, cwd, model);
     this.sessions.set(session.id, session);

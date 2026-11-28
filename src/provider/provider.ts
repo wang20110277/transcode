@@ -194,6 +194,8 @@ export function validateModelSpec(spec: string): string | null {
     return known ? null : `invalid model id: ${raw}(可用模型见 agent/models)`;
   }
   const prefix = raw.slice(0, colon).toLowerCase();
+  const modelPart = raw.slice(colon + 1).trim();
+  if (!modelPart) return `invalid model id: ${raw}(可用模型见 agent/models)`;
   const knownPrefix =
     prefix in MODEL_REGISTRY || prefix in PROVIDER_DEFAULTS || prefix in SPEC_PREFIX;
   return knownPrefix ? null : `invalid model id: ${raw}(可用模型见 agent/models)`;

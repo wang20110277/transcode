@@ -7,7 +7,7 @@ import {
   ToolMessage,
   type BaseMessage,
 } from '@langchain/core/messages';
-import { createModel, getAvailableModels, resolveModel } from '../provider/provider.js';
+import { createModel, getAvailableModels, resolveModel, validateModelSpec } from '../provider/provider.js';
 import { runAgentLoop, type AgentEvent, type PermissionRequest } from '../agent/loop.js';
 import { createToolSession, type ToolSession } from '../agent/tools/index.js';
 import { getPermissionMode } from '../agent/permission.js';
@@ -219,6 +219,10 @@ export class AcpSession {
   setModel(modelId: string): AcpSessionModelState {
     const trimmed = modelId.trim();
     if (!trimmed) throw new RpcError(RPC_ERRORS.invalidParams, 'modelId is required');
+    // Same contract as session/new: reject unknown specs instead of
+    // silently running (and picker-displaying) the default model.
+    const problem = validateModelSpec(trimmed);
+    if (problem) throw new RpcError(RPC_ERRORS.invalidParams, problem);
     this.modelSpec = trimmed;
     return this.modelState;
   }
@@ -284,6 +288,9 @@ export class AcpSession {
       if (signal.aborted) return { stopReason: 'cancelled' };
 
       const message = error instanceof Error ? error.message : String(error);
+      // Operational failure (missing key, gateway error…): the host-facing
+      // `error: ` stderr convention — protocol outcomes never reach here.
+      process.stderr.write(`error: ${message}\n`);
       const errorText = `[transcode error] ${message}`;
       this.messages.push(new AIMessage({ content: errorText }));
       this.host.sendUpdate(this.id, {
