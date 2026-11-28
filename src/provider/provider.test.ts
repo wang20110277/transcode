@@ -230,21 +230,61 @@ describe('validateModelSpec 补充', () => {
   });
 });
 
-describe('getSelectableModels', () => {
-  test('展开厂商模型,不含厂商裸 id,同名模型带厂商名可区分', async () => {
-    const { getSelectableModels } = await import('./provider.js');
-    const catalog = getSelectableModels();
-    expect(catalog.length).toBeGreaterThan(0);
-    const flash = catalog.find((m) => m.modelId === 'glmc:glm-5.3-flash');
-    expect(flash?.name).toContain('GLM Coding Plan');
-    expect(flash?.name).toContain('glm-5.3-flash');
-    expect(catalog.some((m) => m.modelId === 'glmc')).toBe(false);
-    const names = new Map(catalog.map((m) => [m.modelId, m.name]));
-    expect(names.get('glm:glm-5.3')).toContain('GLM');
-    expect(names.get('glmc:glm-5.3')).toContain('GLM Coding Plan');
+describe('getSelectableModels(key 圈定)', () => {
+  const PROVIDER_KEY_ENV = [
+    'ANTHROPIC_API_KEY',
+    'ANTHROPIC_AUTH_TOKEN',
+    'OPENAI_API_KEY',
+    'DEEPSEEK_API_KEY',
+    'GLM_API_KEY',
+    'MINIMAX_API_KEY',
+    'KIMI_API_KEY',
+    'TRANSCODE_API_KEY',
+  ];
+  const saved: Record<string, string | undefined> = {};
+  const scrubEnv = () => {
+    for (const name of PROVIDER_KEY_ENV) {
+      saved[name] = process.env[name];
+      delete process.env[name];
+    }
+  };
+  const restoreEnv = () => {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  };
+
+  test('空配置无 key 无网关 → 空目录', async () => {
+    scrubEnv();
+    try {
+      const { getSelectableModels } = await import('./provider.js');
+      expect(getSelectableModels()).toEqual([]);
+    } finally {
+      restoreEnv();
+    }
   });
 
-  test('自定义网关多条全出现(custom 槽 + 两个 profile)', async () => {
+  test('有 key 厂商才出现:glmc 有 key,deepseek/opus 不出现', async () => {
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(
+      process.env.TRANSCODE_CONFIG_PATH!,
+      JSON.stringify({ apiKeys: { glmc: 'test-key' } }),
+    );
+    scrubEnv();
+    try {
+      const { getSelectableModels } = await import('./provider.js');
+      const ids = getSelectableModels().map((m) => m.modelId);
+      expect(ids).toContain('glmc:glm-5.3-flash');
+      expect(ids.some((id) => id.startsWith('deepseek:'))).toBe(false);
+      expect(ids.some((id) => id.startsWith('anthropic:'))).toBe(false);
+      expect(ids).not.toContain('glmc');
+    } finally {
+      restoreEnv();
+    }
+  });
+
+  test('#27 custom 槽位只出网关一条,不产生厂商侧重复', async () => {
     const { writeFileSync } = await import('node:fs');
     writeFileSync(
       process.env.TRANSCODE_CONFIG_PATH!,
@@ -261,12 +301,24 @@ describe('getSelectableModels', () => {
     expect(ids).toContain('custom');
     expect(ids).toContain('gw1');
     expect(ids).toContain('gw2');
+    expect(ids).not.toContain('custom:legacy-model');
   });
 
-  test('全量条目过校验器(任一 modelId 可直接用于 session/new)', async () => {
-    const { getSelectableModels, validateModelSpec } = await import('./provider.js');
-    for (const model of getSelectableModels()) {
+  test('全量条目过校验与解析(含 gateway 条目)', async () => {
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(
+      process.env.TRANSCODE_CONFIG_PATH!,
+      JSON.stringify({
+        apiKeys: { glmc: 'k', deepseek: 'k' },
+        profiles: { gw1: { baseUrl: 'http://a/v1', model: 'ma' } },
+      }),
+    );
+    const { getSelectableModels, validateModelSpec, resolveModel } = await import('./provider.js');
+    const catalog = getSelectableModels();
+    expect(catalog.length).toBeGreaterThan(0);
+    for (const model of catalog) {
       expect(validateModelSpec(model.modelId)).toBeNull();
+      expect(resolveModel(model.modelId).baseUrl).toBeTruthy();
     }
   });
 });

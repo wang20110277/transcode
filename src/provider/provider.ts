@@ -116,6 +116,11 @@ export function vendorModels(id: ModelId): string[] {
 export function getSelectableModels(): { modelId: string; name: string }[] {
   const byId = new Map<string, { modelId: string; name: string }>();
   for (const id of Object.keys(MODEL_REGISTRY) as ModelId[]) {
+    // The legacy custom slot ships via listCustomGateways (one entry, with
+    // its guards) — emitting it here too would duplicate the channel.
+    if (id === 'custom') continue;
+    // Channels without a configured key never appear — in any path.
+    if (!lookupApiKey(id)) continue;
     const registryName = MODEL_REGISTRY[id]?.name ?? id;
     for (const model of vendorModels(id)) {
       const modelId = vendorModelSpec(id, model);

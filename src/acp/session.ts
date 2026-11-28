@@ -7,7 +7,7 @@ import {
   ToolMessage,
   type BaseMessage,
 } from '@langchain/core/messages';
-import { createModel, getSelectableModels, resolveModel, validateModelSpec } from '../provider/provider.js';
+import { createModel, getSelectableModels, modelLabel, resolveModel, validateModelSpec } from '../provider/provider.js';
 import { runAgentLoop, type AgentEvent, type PermissionRequest } from '../agent/loop.js';
 import { createToolSession, type ToolSession } from '../agent/tools/index.js';
 import { getPermissionMode } from '../agent/permission.js';
@@ -49,7 +49,7 @@ function modelCatalog(currentId: string): AcpModelInfo[] {
     name: model.name,
   }));
   if (!models.some((model) => model.modelId === currentId)) {
-    models.unshift({ modelId: currentId, name: currentId });
+    models.unshift({ modelId: currentId, name: modelLabel(currentId) });
   }
   return models;
 }

@@ -20,6 +20,9 @@ beforeEach(() => {
   sessionsDir = mkdtempSync(path.join(tmpdir(), 'transcode-acp-srv-sessions-'));
   workspaceA = mkdtempSync(path.join(tmpdir(), 'transcode-acp-srv-a-'));
   workspaceB = mkdtempSync(path.join(tmpdir(), 'transcode-acp-srv-b-'));
+  // #29: tests must not read the developer's real ~/.transcode.json —
+  // catalog assertions are key-scoped and machine keys would leak in.
+  process.env.TRANSCODE_CONFIG_PATH = path.join(sessionsDir, 'config.json');
   process.env.TRANSCODE_SESSIONS_DIR = sessionsDir;
   process.env.TRANSCODE_MOCK = '1';
 });
@@ -27,6 +30,7 @@ beforeEach(() => {
 afterEach(() => {
   delete process.env.TRANSCODE_SESSIONS_DIR;
   delete process.env.TRANSCODE_MOCK;
+  delete process.env.TRANSCODE_CONFIG_PATH;
   rmSync(sessionsDir, { recursive: true, force: true });
   rmSync(workspaceA, { recursive: true, force: true });
   rmSync(workspaceB, { recursive: true, force: true });
@@ -135,7 +139,11 @@ describe('session/list 与 session/close', () => {
 });
 
 describe('agent/models', () => {
-  test('免初始化直接可用,返回具体规格目录', async () => {
+  test('免初始化直接可用,返回具体规格目录(key 圈定)', async () => {
+    writeFileSync(
+      process.env.TRANSCODE_CONFIG_PATH!,
+      JSON.stringify({ apiKeys: { glmc: 'test-key' } }),
+    );
     const server = makeServer();
     const frame = await server.call('agent/models');
     const models = (frame.result as { models: Array<{ modelId: string; name: string }> })
@@ -147,6 +155,10 @@ describe('agent/models', () => {
   });
 
   test('session/new 的 availableModels 同为具体规格', async () => {
+    writeFileSync(
+      process.env.TRANSCODE_CONFIG_PATH!,
+      JSON.stringify({ apiKeys: { glmc: 'test-key' } }),
+    );
     const server = makeServer();
     const created = (await server.call('session/new', { cwd: workspaceA })).result as {
       sessionId: string;
@@ -155,6 +167,25 @@ describe('agent/models', () => {
     expect(
       created.models.availableModels.some((model) => model.modelId === 'glmc:glm-5.3-flash'),
     ).toBe(true);
+  });
+
+  test('#28 默认模型的 unshift 行显示注册表名而非裸 id', async () => {
+    writeFileSync(
+      process.env.TRANSCODE_CONFIG_PATH!,
+      JSON.stringify({ apiKeys: { glmc: 'test-key' } }),
+    );
+    process.env.TRANSCODE_MODEL = 'glmc';
+    try {
+      const server = makeServer();
+      const created = (await server.call('session/new', { cwd: workspaceA })).result as {
+        models: { availableModels: Array<{ modelId: string; name: string }> };
+      };
+      const head = created.models.availableModels[0]!;
+      expect(head.modelId).toBe('glmc');
+      expect(head.name).toBe('GLM Coding Plan');
+    } finally {
+      delete process.env.TRANSCODE_MODEL;
+    }
   });
 });
 
