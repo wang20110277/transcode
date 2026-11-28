@@ -61,18 +61,25 @@ describe('loadProjectContext', () => {
     expect(entry?.content).toContain('Some rules.');
   });
 
-  test('reads CLAUDE.md and AGENTS.md too, with TRANS.md taking priority', async () => {
+  test('同级并存只载 TRANS.md(每级一个,优先级取先)', async () => {
     const dir = workspace();
     writeFileSync(path.join(dir, 'TRANS.md'), 'trans rules\n');
     writeFileSync(path.join(dir, 'CLAUDE.md'), 'claude rules\n');
     writeFileSync(path.join(dir, 'AGENTS.md'), 'agents rules\n');
 
     const context = await loadProjectContext(dir);
-    expect(context.projectFiles.map((file) => file.path)).toEqual([
-      'TRANS.md',
-      'AGENTS.md',
-      'CLAUDE.md',
-    ]);
+    expect(context.projectFiles.map((file) => file.path)).toEqual(['TRANS.md']);
+  });
+
+  test('非 git 目录向上也能载到父级说明(根→最近排序)', async () => {
+    const root = workspace();
+    writeFileSync(path.join(root, 'AGENTS.md'), 'root rules\n');
+    const sub = path.join(root, 'pkg');
+    mkdirSync(sub, { recursive: true });
+    writeFileSync(path.join(sub, 'TRANS.md'), 'sub rules\n');
+
+    const context = await loadProjectContext(sub);
+    expect(context.projectFiles.map((file) => file.path)).toEqual(['../AGENTS.md', 'TRANS.md']);
   });
 
   test('returns no project files when none exist', async () => {

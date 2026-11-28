@@ -1,12 +1,8 @@
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
 import { getRouting } from '../provider/provider.js';
 import { loadUserMemory, renderMemoryIndex, type UserMemory } from './memory.js';
 import { loadConfig } from '../config.js';
 import { normalizeWebSearchConfig } from '../provider/web-search.js';
-
-const CONTEXT_FILES = ['TRANS.md', 'AGENTS.md', 'CLAUDE.md', 'TRANSCODE.md', '.transcode/AGENTS.md'];
-const MAX_CONTEXT_CHARS = 40_000;
+import { loadHierarchyContext } from './context-files.js';
 
 /** Prompt behind /init: agent analyzes the project and writes TRANS.md. */
 export const INIT_PROMPT = `Analyze this project and create a TRANS.md file at the workspace root that records the project background and working rules, like CLAUDE.md does for Claude Code.
@@ -27,15 +23,6 @@ export interface ProjectContext {
   projectFiles: { path: string; content: string }[];
   /** User-level memory (global instructions + memories); loaded alongside project files. */
   userMemory?: UserMemory;
-}
-
-async function readOptional(file: string): Promise<string | null> {
-  try {
-    const content = await fs.readFile(file, 'utf8');
-    return content.trim() || null;
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -87,23 +74,7 @@ async function gitBranch(cwd: string): Promise<string | undefined> {
 }
 
 export async function loadProjectContext(cwd: string): Promise<ProjectContext> {
-  const projectFiles: ProjectContext['projectFiles'] = [];
-  let budget = MAX_CONTEXT_CHARS;
-
-  for (const relative of CONTEXT_FILES) {
-    if (budget <= 0) break;
-    const absolute = path.join(cwd, relative);
-    const content = await readOptional(absolute);
-    if (!content) continue;
-
-    const clipped =
-      content.length > budget
-        ? `${content.slice(0, budget)}\n... (project instructions truncated)`
-        : content;
-    projectFiles.push({ path: relative, content: clipped });
-    budget -= clipped.length;
-  }
-
+  const projectFiles = await loadHierarchyContext(cwd);
   return { cwd, gitBranch: await gitBranch(cwd), projectFiles, userMemory: await loadUserMemory() };
 }
 
