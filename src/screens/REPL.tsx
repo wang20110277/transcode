@@ -97,7 +97,10 @@ interface HistoryEntry {
 /** Key-input phases echo asterisks, never the typed secret (#4). */
 export function inputEcho(phase: PromptPhase, input: string): string {
   const secret =
-    phase === 'model_apikey' || phase === 'vendor_apikey' || phase === 'search_apikey';
+    phase === 'model_apikey' ||
+    phase === 'vendor_apikey' ||
+    phase === 'search_apikey' ||
+    phase === 'model_check'; // the key is retyped here while the probe runs
   return secret ? '*'.repeat(input.length) : input;
 }
 
@@ -654,6 +657,9 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       setBusyBoth(true);
       const controller = new AbortController();
       abortRef.current = controller;
+      // Set BEFORE the try (#5 follow-up): a pre-turn throw must land under
+      // THIS turn's echo, not the previous turn's stale display ref.
+      turnDisplayRef.current = display ?? text;
 
       let endedNaturally = false;
       let turnHiddenLines: string[] | undefined;
@@ -896,13 +902,22 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
     ) => {
       let target = spec;
       let label = displayName;
-      if (newCustom) {
-        target = saveCustomProfile(newCustom);
-        label = target;
+      try {
+        if (newCustom) {
+          target = saveCustomProfile(newCustom);
+          label = target;
+        }
+        registerApiKey(target.split(':')[0]!, apiKey);
+        setPreferredModel(target);
+      } catch (error) {
+        // Corrupt config refuses to save — surface it instead of crashing
+        // the key handler (process exit); the in-memory switch still applies.
+        addHistory({
+          input: '••••••••',
+          output: `⚠ 未持久化模型设置:${error instanceof Error ? error.message : String(error)}`,
+        });
       }
-      registerApiKey(target.split(':')[0]!, apiKey);
       ctx.setModelId(target);
-      setPreferredModel(target);
       // What was actually requested (a custom entry's name may be a
       // sanitised form of its model id): the note is only for a gateway
       // that really maps the name onto another model.
@@ -1088,6 +1103,15 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
     toolSessionRef.current = createToolSession(process.cwd());
   }, []);
 
+  /** Queued-command chain (#9 + review): fires the next queued prompt, but
+   *  only for a submission that CAME from the queue AND only when the
+   *  command left the prompt idle — pickers consume the next input. */
+  const maybeContinueQueue = (fromQueue: boolean) => {
+    if (!fromQueue || phaseRef.current !== 'idle') return;
+    const next = applyQueue({ type: 'submitNext' });
+    if (next.submit) void handleSubmitRef.current(next.submit, true);
+  };
+
   const handleSubmit = useCallback(async (raw: string, fromQueue = false) => {
     // Bare Enter is a no-op except at the apikey prompt, where it means
     // "reuse the saved key" (the prompt's 回车沿用 hint).
@@ -1108,7 +1132,14 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       }
       const pending = pendingSwitchRef.current!;
       pendingSwitchRef.current = null;
-      writeContextTokens(pending.target, tokens);
+      try {
+        writeContextTokens(pending.target, tokens);
+      } catch (error) {
+        addHistory({
+          input: trimmed,
+          output: `⚠ 未持久化上下文预算:${error instanceof Error ? error.message : String(error)}`,
+        });
+      }
       setPhase('idle');
       applyModelSwitch(pending.spec, pending.displayName, pending.apiKey, pending.message, pending.served, pending.newCustom);
       commitInput('');
@@ -1184,6 +1215,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
     if (cmdName === 'new') {
       startNewConversation();
       addHistory({ input: trimmed, output: '已开始新对话。' });
+      maybeContinueQueue(fromQueue);
       commitInput('');
       setHistoryIndex(-1);
       setSavedInput('');
@@ -1238,6 +1270,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
           addHistory({ input: trimmed, output: `未找到对话“${target}”。先 /sessions 查看列表。` });
         } else {
           await resumeWith(record, trimmed, keep);
+          maybeContinueQueue(fromQueue);
         }
       }
       commitInput('');
@@ -1328,6 +1361,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
         setBusyBoth(false);
       }
       finishCompact();
+      maybeContinueQueue(fromQueue);
       return;
     }
 
@@ -1381,14 +1415,8 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       await runChat(trimmed);
       return;
     }
-    // Queued slash chain (#9): a command never runs the agent loop, so a
-    // queued prompt behind it would freeze forever. Only a submission that
-    // CAME from the queue chains on, and only when the command left the
-    // prompt idle — pickers consume the next input themselves.
-    if (fromQueue && phaseRef.current === 'idle') {
-      const next = applyQueue({ type: 'submitNext' });
-      if (next.submit) void handleSubmitRef.current(next.submit, true);
-    }
+    maybeContinueQueue(fromQueue);
+    dragFlush();
     dragFlush();
 
     commitInput('');

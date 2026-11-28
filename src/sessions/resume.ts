@@ -1,6 +1,13 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { listSessions, readSessionRecord, sessionsRoot, projectDirName, type SessionRecord } from './store.js';
+import {
+  listSessions,
+  projectDirName,
+  projectSlugDir,
+  readSessionRecord,
+  sessionsRoot,
+  type SessionRecord,
+} from './store.js';
 
 /**
  * Sessions of ONE project, newest first — the picker source for /resume and
@@ -10,21 +17,27 @@ import { listSessions, readSessionRecord, sessionsRoot, projectDirName, type Ses
  */
 export async function listProjectSessions(cwd: string): Promise<SessionRecord[]> {
   const wanted = await realpathQuiet(cwd);
-  const dir = path.join(sessionsRoot(), projectDirName(cwd));
-  let files: string[];
-  try {
-    files = (await fs.readdir(dir)).filter((file) => file.endsWith('.json'));
-  } catch {
-    return [];
-  }
+  // Canonical slug first; the legacy spelling slug keeps pre-realpath
+  // records visible (both dirs may hold sessions for one project).
+  const dirs = [...new Set([projectSlugDir(cwd), projectDirName(cwd)])]
+    .map((slug) => path.join(sessionsRoot(), slug));
   const records: SessionRecord[] = [];
-  for (const file of files) {
-    const record = readSessionRecord(path.join(dir, file));
-    if (!record) continue;
-    // The directory already scopes by cwd spelling; realpath comparing
-    // catches alias spellings stored under the same directory name.
-    if (record.cwd === cwd || (await realpathQuiet(record.cwd)) === wanted) {
-      records.push(record);
+  const seen = new Set<string>();
+  for (const dir of dirs) {
+    let files: string[];
+    try {
+      files = (await fs.readdir(dir)).filter((file) => file.endsWith('.json'));
+    } catch {
+      continue;
+    }
+    for (const file of files) {
+      if (seen.has(file)) continue;
+      seen.add(file);
+      const record = readSessionRecord(path.join(dir, file));
+      if (!record) continue;
+      if (record.cwd === cwd || (await realpathQuiet(record.cwd)) === wanted) {
+        records.push(record);
+      }
     }
   }
   return records.sort((a, b) => b.updatedAt - a.updatedAt);

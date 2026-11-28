@@ -747,8 +747,14 @@ export function lookupApiKey(specOrId: string): string | undefined {
   for (const [id, config] of Object.entries(MODEL_REGISTRY)) {
     if (config.envKey === resolved.envKey) candidates.push(id);
   }
+  const storedKeys = loadConfig().apiKeys;
   for (const candidate of candidates) {
-    const key = keyStore.get(candidate) ?? loadConfig().apiKeys?.[candidate];
+    // Own-property only: the prototype chain holds no keys (#8 follow-up).
+    const fromStore =
+      storedKeys && Object.prototype.hasOwnProperty.call(storedKeys, candidate)
+        ? storedKeys[candidate]
+        : undefined;
+    const key = keyStore.get(candidate) ?? fromStore;
     if (key) return key;
   }
   return apiKeyFor(resolved.envKey) || undefined;

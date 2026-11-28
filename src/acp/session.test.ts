@@ -29,7 +29,9 @@ afterEach(() => {
 });
 
 function recordFile(session: AcpSession): string {
-  const projectDir = workspace.replace(/[\\/:]/g, '-');
+  // saveSession slugs by realpath since the clearing round — mirror it.
+  const real = require('node:fs').realpathSync(workspace);
+  const projectDir = real.replace(/[\\/:]/g, '-');
   return path.join(sessionsDir, projectDir, `${session.id}.json`);
 }
 

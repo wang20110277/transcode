@@ -133,7 +133,8 @@ export async function resolveContextImports(
   let inFence = false;
   for (const line of content.split('\n')) {
     // Fence-aware (#14): a line INSIDE a ``` block documents the syntax —
-    // it is content, not an import directive.
+    // it is content, not an import directive. Heuristic edges (~~~, an
+    // inline span alone on a line) can mistoggle the state; accepted.
     if (/^\s*```/.test(line)) {
       inFence = !inFence;
       out.push(line);

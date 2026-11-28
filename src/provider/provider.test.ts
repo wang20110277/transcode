@@ -575,3 +575,27 @@ describe('Minor 清账 F/G 组', () => {
     expect(authHeaders(undefined)).toEqual({});
   });
 });
+
+describe('清账轮审查修复', () => {
+  test('#8b lookupApiKey 不读原型链', async () => {
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(
+      process.env.TRANSCODE_CONFIG_PATH!,
+      JSON.stringify({ apiKeys: { glmc: 'k' } }),
+    );
+    const names = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'OPENAI_API_KEY',
+      'DEEPSEEK_API_KEY', 'GLM_API_KEY', 'MINIMAX_API_KEY', 'KIMI_API_KEY', 'TRANSCODE_API_KEY'];
+    const saved: Record<string, string | undefined> = {};
+    for (const n of names) { saved[n] = process.env[n]; delete process.env[n]; }
+    try {
+      const { lookupApiKey } = await import('./provider.js');
+      expect(lookupApiKey('toString')).toBeUndefined();
+      expect(lookupApiKey('hasOwnProperty')).toBeUndefined();
+      expect(lookupApiKey('glmc')).toBe('k');
+    } finally {
+      for (const [n, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[n]; else process.env[n] = v;
+      }
+    }
+  });
+});

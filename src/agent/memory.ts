@@ -204,8 +204,17 @@ export async function saveMemory(input: {
 }
 
 export async function deleteMemory(name: string): Promise<boolean> {
-  const safe = sanitizeMemoryName(name);
-  if (!safe) return false;
+  let safe = sanitizeMemoryName(name);
+  if (!safe) {
+    // Legacy files created under the lenient sanitize (internal
+    // whitespace) still load — they must stay deletable (#10): allow the
+    // looser name for lookup only; path separators stay forbidden.
+    const loose = name.trim();
+    if (!loose || loose === '.' || loose === '..' || loose.includes('/') || loose.includes('\\')) {
+      return false;
+    }
+    safe = loose;
+  }
   const target = path.join(memoryDir(), `${safe}.md`);
   if (!fs.existsSync(target)) return false;
   fs.rmSync(target);

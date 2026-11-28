@@ -296,3 +296,10 @@ describe('inputEcho(#4 掩码)', () => {
     expect(inputEcho('custom_baseurl', 'http://x')).toBe('http://x');
   });
 });
+
+describe('清账轮审查修复', () => {
+  test('#4b model_check 相位也掩码', async () => {
+    const { inputEcho } = await import('./REPL.js');
+    expect(inputEcho('model_check', 'sk-1')).toBe('****');
+  });
+});

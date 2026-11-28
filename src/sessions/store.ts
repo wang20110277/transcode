@@ -47,6 +47,19 @@ export const projectDirName = (cwd: string): string => cwd.replace(/[\\/:]/g, '-
  */
 const projectDir = projectDirName;
 
+/**
+ * Canonical project slug: realpath'd so symlink spellings (/tmp vs
+ * /private/tmp) file into ONE directory; falls back to the raw spelling
+ * when realpath fails (missing path).
+ */
+export function projectSlugDir(cwd: string): string {
+  try {
+    return projectDirName(fs.realpathSync(cwd));
+  } catch {
+    return projectDirName(cwd);
+  }
+}
+
 /** Fresh conversation id: bare UUID v4, like Claude Code session files. */
 export function newSessionId(): string {
   return randomUUID();
@@ -135,7 +148,7 @@ function readRecord(file: string): SessionRecord | null {
 }
 
 export function saveSession(record: SessionRecord): void {
-  const dir = path.join(sessionsDir(), projectDir(record.cwd));
+  const dir = path.join(sessionsDir(), projectSlugDir(record.cwd));
   fs.mkdirSync(dir, { recursive: true });
   const target = path.join(dir, `${record.id}.json`);
   const tmp = `${target}.tmp`;

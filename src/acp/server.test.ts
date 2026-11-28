@@ -294,7 +294,8 @@ describe('session/load 走磁盘', () => {
       prompt: [{ type: 'text', text: '第一轮' }],
     });
 
-    const projectDir = workspaceA.replace(/[\\/:]/g, '-');
+    const { realpathSync } = await import('node:fs');
+    const projectDir = realpathSync(workspaceA).replace(/[\\/:]/g, '-');
     writeFileSync(path.join(sessionsDir, projectDir, `${created.sessionId}.json`), '{broken');
 
     const second = makeServer();

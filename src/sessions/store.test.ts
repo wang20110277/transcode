@@ -183,3 +183,29 @@ describe('session store', () => {
     expect(listSessions()[0]!.id).toBe('ses_test1');
   });
 });
+
+describe('slug realpath 等价(清账轮 Important)', () => {
+  test('符号链接拼写保存,物理拼写可列出(反之亦然)', async () => {
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const fs = await import('node:fs');
+    const { mkdtempSync, rmSync } = fs;
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'tc-slug-'));
+    process.env.TRANSCODE_SESSIONS_DIR = path.join(dir, 's');
+    try {
+      const { saveSession } = await import('./store.js');
+      const { listProjectSessions } = await import('./resume.js');
+      // macOS tmpdir 是 /var/... 拼法,真实路径 /private/var/...
+      const alias = path.join(os.tmpdir(), 'tc-slug-' + path.basename(dir).slice('tc-slug-'.length));
+      const physical = await fs.promises.realpath(dir);
+      saveSession({ id: 'ses_slug1', title: 't', createdAt: 1, updatedAt: 1, cwd: alias, model: 'm', messages: [] });
+      const viaPhysical = await listProjectSessions(physical);
+      expect(viaPhysical.some((r) => r.id === 'ses_slug1')).toBe(true);
+      const viaAlias = await listProjectSessions(alias);
+      expect(viaAlias.some((r) => r.id === 'ses_slug1')).toBe(true);
+    } finally {
+      delete process.env.TRANSCODE_SESSIONS_DIR;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
