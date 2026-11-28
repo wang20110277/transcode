@@ -135,14 +135,26 @@ describe('session/list 与 session/close', () => {
 });
 
 describe('agent/models', () => {
-  test('免初始化直接可用,返回目录', async () => {
+  test('免初始化直接可用,返回具体规格目录', async () => {
     const server = makeServer();
     const frame = await server.call('agent/models');
     const models = (frame.result as { models: Array<{ modelId: string; name: string }> })
       .models;
     expect(Array.isArray(models)).toBe(true);
-    expect(models.some((model) => model.modelId === 'glmc')).toBe(true);
+    expect(models.some((model) => model.modelId === 'glmc:glm-5.3-flash')).toBe(true);
+    expect(models.some((model) => model.modelId === 'glmc')).toBe(false);
     expect(models.every((model) => typeof model.name === 'string')).toBe(true);
+  });
+
+  test('session/new 的 availableModels 同为具体规格', async () => {
+    const server = makeServer();
+    const created = (await server.call('session/new', { cwd: workspaceA })).result as {
+      sessionId: string;
+      models: { availableModels: Array<{ modelId: string }> };
+    };
+    expect(
+      created.models.availableModels.some((model) => model.modelId === 'glmc:glm-5.3-flash'),
+    ).toBe(true);
   });
 });
 

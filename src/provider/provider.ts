@@ -106,6 +106,32 @@ export function vendorModels(id: ModelId): string[] {
   return VENDOR_MODELS[id] ?? [MODEL_REGISTRY[id]?.model ?? ''].filter(Boolean);
 }
 
+/**
+ * The actionable model catalog for hosts and the CLI: concrete selectable
+ * entries (glmc:glm-5.3-flash), not the vendor registry layer. Curated
+ * vendor lists expand into specs; every saved custom gateway (profile or
+ * the legacy custom slot — possibly several) appends its own entry. Every
+ * modelId passes validateModelSpec and resolves via resolveModel.
+ */
+export function getSelectableModels(): { modelId: string; name: string }[] {
+  const byId = new Map<string, { modelId: string; name: string }>();
+  for (const id of Object.keys(MODEL_REGISTRY) as ModelId[]) {
+    const registryName = MODEL_REGISTRY[id]?.name ?? id;
+    for (const model of vendorModels(id)) {
+      const modelId = vendorModelSpec(id, model);
+      if (!byId.has(modelId)) {
+        byId.set(modelId, { modelId, name: `${registryName} ${model}` });
+      }
+    }
+  }
+  for (const gateway of listCustomGateways()) {
+    if (!byId.has(gateway.spec)) {
+      byId.set(gateway.spec, { modelId: gateway.spec, name: `${gateway.spec} · ${gateway.model}` });
+    }
+  }
+  return [...byId.values()];
+}
+
 export function vendorModelSpec(id: ModelId, modelName: string): string {
   const prefix = SPEC_PREFIX[id] ?? id;
   return `${prefix}:${modelName}`;

@@ -18,6 +18,7 @@ describe('transcode models', () => {
     const text = writes.join('');
     expect(text.split('\n').filter(Boolean)).toHaveLength(1);
     const models = JSON.parse(text) as Array<{ modelId: string; name: string }>;
-    expect(models.some((model) => model.modelId === 'glmc')).toBe(true);
+    expect(models.some((model) => model.modelId === 'glmc:glm-5.3-flash')).toBe(true);
+    expect(models.some((model) => model.modelId === 'glmc')).toBe(false);
   });
 });

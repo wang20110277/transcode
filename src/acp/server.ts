@@ -5,7 +5,7 @@ import { getSession } from '../sessions/store.js';
 import { listProjectSessions } from '../sessions/resume.js';
 import { loadConfig } from '../config.js';
 import { webSearchConfigWarning } from '../provider/web-search.js';
-import { validateModelSpec, getAvailableModels } from '../provider/provider.js';
+import { validateModelSpec, getSelectableModels } from '../provider/provider.js';
 import { invalidRulesNotice, loadPermissionRules } from '../agent/permission-rules.js';
 import { AGENT_TOOL_NAMES } from '../agent/tools/index.js';
 import { VERSION } from '../version.js';
@@ -116,12 +116,7 @@ export class AcpServer implements AcpSessionHost {
       // transcode extension: the model catalog without session semantics —
       // hosts can populate pickers with one cheap call, no session/new.
       case 'agent/models': {
-        return {
-          models: getAvailableModels().map((model) => ({
-            modelId: model.id,
-            name: model.name,
-          })),
-        };
+        return { models: getSelectableModels() };
       }
 
       case 'session/new':

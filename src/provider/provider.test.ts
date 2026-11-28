@@ -229,3 +229,44 @@ describe('validateModelSpec 补充', () => {
     expect(resolveModel('glmc').model).toBe('my-model');
   });
 });
+
+describe('getSelectableModels', () => {
+  test('展开厂商模型,不含厂商裸 id,同名模型带厂商名可区分', async () => {
+    const { getSelectableModels } = await import('./provider.js');
+    const catalog = getSelectableModels();
+    expect(catalog.length).toBeGreaterThan(0);
+    const flash = catalog.find((m) => m.modelId === 'glmc:glm-5.3-flash');
+    expect(flash?.name).toContain('GLM Coding Plan');
+    expect(flash?.name).toContain('glm-5.3-flash');
+    expect(catalog.some((m) => m.modelId === 'glmc')).toBe(false);
+    const names = new Map(catalog.map((m) => [m.modelId, m.name]));
+    expect(names.get('glm:glm-5.3')).toContain('GLM');
+    expect(names.get('glmc:glm-5.3')).toContain('GLM Coding Plan');
+  });
+
+  test('自定义网关多条全出现(custom 槽 + 两个 profile)', async () => {
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(
+      process.env.TRANSCODE_CONFIG_PATH!,
+      JSON.stringify({
+        custom: { baseUrl: 'http://legacy/v1', model: 'legacy-model' },
+        profiles: {
+          gw1: { baseUrl: 'http://a/v1', model: 'ma' },
+          gw2: { baseUrl: 'http://b/v1', model: 'mb' },
+        },
+      }),
+    );
+    const { getSelectableModels } = await import('./provider.js');
+    const ids = getSelectableModels().map((m) => m.modelId);
+    expect(ids).toContain('custom');
+    expect(ids).toContain('gw1');
+    expect(ids).toContain('gw2');
+  });
+
+  test('全量条目过校验器(任一 modelId 可直接用于 session/new)', async () => {
+    const { getSelectableModels, validateModelSpec } = await import('./provider.js');
+    for (const model of getSelectableModels()) {
+      expect(validateModelSpec(model.modelId)).toBeNull();
+    }
+  });
+});
