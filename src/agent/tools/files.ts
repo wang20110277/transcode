@@ -173,6 +173,7 @@ export const readFileTool: AgentTool = {
       path.dirname(absolute),
       ctx.session.rootCwd,
       ctx.session.injectedSubdirs,
+      ctx.session.checkedSubdirs,
     );
     if (note) output += `\n\n[(来自 ${note.path})]\n${note.content}`;
     return output;

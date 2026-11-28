@@ -36,16 +36,24 @@ const TRUNCATION_MARKER = '... (project instructions truncated)';
 const MAX_LEVELS_WITHOUT_GIT = 5;
 
 /** Git repository root of `cwd`, or null when cwd is not inside one. */
+const gitRootCache = new Map<string, string | null>();
+
 export async function gitRootOf(cwd: string): Promise<string | null> {
+  const key = path.resolve(cwd);
+  if (gitRootCache.has(key)) return gitRootCache.get(key)!;
+  let root: string | null = null;
   try {
-    return await new Promise<string | null>((resolve) => {
-      execFile('git', ['rev-parse', '--show-toplevel'], { cwd }, (error, stdout) => {
+    root = await new Promise<string | null>((resolve) => {
+      // timeout (#15) + per-process cache (#13): ACP prompts reuse it.
+      execFile('git', ['rev-parse', '--show-toplevel'], { cwd, timeout: 5_000 }, (error, stdout) => {
         resolve(error || !stdout.trim() ? null : stdout.trim());
       });
     });
   } catch {
-    return null;
+    root = null;
   }
+  gitRootCache.set(key, root);
+  return root;
 }
 
 /**
@@ -118,11 +126,20 @@ export async function resolveContextImports(
   content: string,
   baseDir: string,
   depth = 0,
-  seen: Set<string> = new Set(),
+  active: Set<string> = new Set(),
+  inlined: Set<string> = new Set(),
 ): Promise<string> {
   const out: string[] = [];
+  let inFence = false;
   for (const line of content.split('\n')) {
-    const match = /^@(\S+)$/.exec(line.trim());
+    // Fence-aware (#14): a line INSIDE a ``` block documents the syntax —
+    // it is content, not an import directive.
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence;
+      out.push(line);
+      continue;
+    }
+    const match = !inFence && /^@(\S+)$/.exec(line.trim());
     if (!match) {
       out.push(line);
       continue;
@@ -133,8 +150,14 @@ export async function resolveContextImports(
       continue;
     }
     const absolute = path.resolve(baseDir, spec);
-    if (seen.has(absolute)) {
+    if (active.has(absolute)) {
       out.push(`(@${spec} 循环导入,已跳过)`);
+      continue;
+    }
+    if (inlined.has(absolute)) {
+      // Diamond/see-also (#14): content dedupe is right, the old label
+      // wrongly cried "循环导入" for a mere second reference.
+      out.push(`(@${spec} 已导入,重复引用省略)`);
       continue;
     }
     let raw: string;
@@ -144,12 +167,14 @@ export async function resolveContextImports(
       out.push(`(@${spec} 导入失败:文件不存在)`);
       continue;
     }
-    seen.add(absolute);
+    inlined.add(absolute);
+    active.add(absolute);
     const body =
       raw.length > MAX_IMPORT_CHARS
         ? `${raw.slice(0, MAX_IMPORT_CHARS)}\n... (@${spec} 超过 64KB,已截断)`
         : raw;
-    out.push(await resolveContextImports(body, path.dirname(absolute), depth + 1, seen));
+    out.push(await resolveContextImports(body, path.dirname(absolute), depth + 1, active, inlined));
+    active.delete(absolute);
   }
   return out.join('\n');
 }
@@ -218,11 +243,17 @@ export async function findSubdirContext(
   dir: string,
   cwd: string,
   injected: Set<string>,
+  checked?: Set<string>,
 ): Promise<ContextFile | null> {
-  const resolved = path.resolve(dir);
-  if (resolved === path.resolve(cwd)) return null;
+  // realpath key (#16): symlink/case aliases of one directory dedupe.
+  const resolved = await realpathOrResolve(dir);
+  if (resolved === (await realpathOrResolve(cwd))) return null;
   if (injected.has(resolved)) return null;
+  // Negative cache (#12): a directory probed note-less is not re-probed on
+  // every read_file — "零开销" honored within the session's freshness trade.
+  if (checked?.has(resolved)) return null;
 
+  const displayBase = await realpathOrResolve(cwd);
   for (const name of SUBDIR_CONTEXT_FILE_NAMES) {
     const absolute = path.join(resolved, name);
     const content = await readOptional(absolute);
@@ -233,8 +264,9 @@ export async function findSubdirContext(
         expanded.length > MAX_SUBDIR_NOTE_CHARS
           ? `${expanded.slice(0, MAX_SUBDIR_NOTE_CHARS)}\n${TRUNCATION_MARKER}`
           : expanded;
-      return { path: path.relative(cwd, absolute), content: clipped };
+      return { path: path.relative(displayBase, absolute), content: clipped };
     }
   }
+  checked?.add(resolved);
   return null;
 }

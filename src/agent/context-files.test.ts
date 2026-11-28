@@ -231,3 +231,49 @@ describe('gitRootOf', () => {
     expect(path.isAbsolute(repoRoot!)).toBe(true);
   });
 });
+
+describe('Minor 清账 D 组', () => {
+  test('#12 无说明目录的负缓存:二次调用不再探测', async () => {
+    const root = makeTree();
+    put(path.join(root, 'plain'), 'a.ts', 'x');
+    const injected = new Set<string>();
+    const checked = new Set<string>();
+    expect(await findSubdirContext(path.join(root, 'plain'), root, injected, checked)).toBeNull();
+    const { promises: fsp } = await import('node:fs');
+    const realPlain = await fsp.realpath(path.join(root, 'plain'));
+    expect(checked.has(realPlain)).toBe(true);
+    // 负缓存命中:即便随后创建了说明文件,本次会话也不再返回
+    put(path.join(root, 'plain'), 'AGENTS.md', 'late');
+    expect(await findSubdirContext(path.join(root, 'plain'), root, injected, checked)).toBeNull();
+  });
+
+  test('#14 菱形导入标"已导入"而非"循环";围栏内 @ 不展开', async () => {
+    const dir = makeTree();
+    put(dir, 'a.md', 'A\n@shared.md');
+    put(dir, 'b.md', 'B\n@shared.md');
+    put(dir, 'shared.md', 'S');
+    put(dir, 'top.md', '@a.md\n@b.md');
+    const out = await resolveContextImports('@a.md\n@b.md', dir);
+    expect(out).toContain('A');
+    expect(out).toContain('B');
+    expect(out.match(/S/g)?.length).toBe(1); // 内容只内联一次
+    expect(out).toContain('已导入');
+    expect(out).not.toContain('循环导入');
+
+    put(dir, 'fence.md', 'FENCE');
+    put(dir, 'doc.md', '```\n@fence.md\n```');
+    const fenced = await resolveContextImports('```\n@fence.md\n```\n', dir);
+    expect(fenced).toContain('@fence.md');
+    expect(fenced).not.toContain('FENCE');
+  });
+
+  test('#16 去重键用 realpath:符号链接别名同目录只注入一次', async () => {
+    const root = makeTree();
+    put(path.join(root, 'real'), 'AGENTS.md', 'note');
+    const link = path.join(root, 'alias');
+    await (await import('node:fs')).promises.symlink(path.join(root, 'real'), link);
+    const injected = new Set<string>();
+    expect(await findSubdirContext(link, root, injected)).toMatchObject({ content: 'note' });
+    expect(await findSubdirContext(path.join(root, 'real'), root, injected)).toBeNull();
+  });
+});

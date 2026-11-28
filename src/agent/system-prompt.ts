@@ -64,7 +64,8 @@ async function gitBranch(cwd: string): Promise<string | undefined> {
   try {
     const { execFile } = await import('node:child_process');
     return await new Promise<string | undefined>((resolve) => {
-      execFile('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd }, (error, stdout) => {
+      // timeout (#15): a hung git must not hang prompt building.
+      execFile('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd, timeout: 5_000 }, (error, stdout) => {
         resolve(error ? undefined : stdout.trim() || undefined);
       });
     });
@@ -74,8 +75,14 @@ async function gitBranch(cwd: string): Promise<string | undefined> {
 }
 
 export async function loadProjectContext(cwd: string): Promise<ProjectContext> {
-  const projectFiles = await loadHierarchyContext(cwd);
-  return { cwd, gitBranch: await gitBranch(cwd), projectFiles, userMemory: await loadUserMemory() };
+  // Parallel (#13): the hierarchy walk, the git branch probe and user
+  // memory are independent — ACP rebuilds this every prompt.
+  const [projectFiles, branch, userMemory] = await Promise.all([
+    loadHierarchyContext(cwd),
+    gitBranch(cwd),
+    loadUserMemory(),
+  ]);
+  return { cwd, gitBranch: branch, projectFiles, userMemory };
 }
 
 export function buildSystemPrompt(

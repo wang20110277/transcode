@@ -32,6 +32,8 @@ export interface ToolSession {
   readFileState: Set<string>;
   /** Directories whose context note read_file already injected this session. */
   injectedSubdirs: Set<string>;
+  /** Directories probed note-less this session (negative cache, #12). */
+  checkedSubdirs: Set<string>;
   /** Current task list, owned by the todo_write tool. */
   todos: TodoItem[];
   /** Background shell tasks (bash run_in_background), keyed by id. */
@@ -45,6 +47,7 @@ export function createToolSession(rootCwd: string): ToolSession {
     rootCwd: absolute,
     readFileState: new Set<string>(),
     injectedSubdirs: new Set<string>(),
+    checkedSubdirs: new Set<string>(),
     todos: [],
     bgTasks: new Map(),
   };
