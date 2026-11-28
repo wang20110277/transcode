@@ -5,6 +5,7 @@ const USAGE = `transcode v${VERSION}
 
 Usage:
   transcode                 Start the interactive REPL
+  transcode models          Print the model catalog as one-line JSON
   transcode acp             Start the ACP stdio server (for transonce, multica and other ACP clients)
   transcode upgrade [version] Upgrade the npm global install to the latest or a specific version
   transcode --version       Print the version
@@ -35,6 +36,19 @@ export async function runCli(argv: string[]): Promise<void> {
 
   if (command === '--help' || command === '-h' || command === 'help') {
     process.stdout.write(USAGE);
+    return;
+  }
+
+  if (command === 'models') {
+    // One-line JSON for hosts and scripts (opencode-style catalog call):
+    // no banner, no session semantics, exit 0. Same {modelId, name} shape
+    // as the ACP agent/models method.
+    const { getAvailableModels } = await import('./provider/provider.js');
+    const models = getAvailableModels().map((model) => ({
+      modelId: model.id,
+      name: model.name,
+    }));
+    process.stdout.write(`${JSON.stringify(models)}\n`);
     return;
   }
 

@@ -134,6 +134,18 @@ describe('session/list 与 session/close', () => {
   });
 });
 
+describe('agent/models', () => {
+  test('免初始化直接可用,返回目录', async () => {
+    const server = makeServer();
+    const frame = await server.call('agent/models');
+    const models = (frame.result as { models: Array<{ modelId: string; name: string }> })
+      .models;
+    expect(Array.isArray(models)).toBe(true);
+    expect(models.some((model) => model.modelId === 'glmc')).toBe(true);
+    expect(models.every((model) => typeof model.name === 'string')).toBe(true);
+  });
+});
+
 describe('session/new 模型校验与 error: stderr 约定', () => {
   test('无效 model → invalidParams + error: 行只进 stderr', async () => {
     const server = makeServer();
