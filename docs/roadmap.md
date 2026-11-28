@@ -42,6 +42,8 @@ transcode 已经有可用的编码 Agent 内核：多模型与自定义网关、
 
 ### 3. 上下文文件层级（小）
 
+状态：已实现。
+
 - **现状**：只读工作区根目录的 `TRANS.md`、`AGENTS.md`、`CLAUDE.md`、`TRANSCODE.md`、`.transcode/AGENTS.md`。
 - **目标**：
   - 从当前目录向上逐级查找，越近的优先级越高。
