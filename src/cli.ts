@@ -41,10 +41,10 @@ export async function runCli(argv: string[]): Promise<void> {
 
   if (command === 'models') {
     // One-line JSON for hosts and scripts (opencode-style catalog call):
-    // no banner, no session semantics, exit 0. Same selectable entries as
-    // the ACP agent/models method.
-    const { getSelectableModels } = await import('./provider/provider.js');
-    process.stdout.write(`${JSON.stringify(getSelectableModels())}\n`);
+    // no banner, no session semantics, exit 0. Live per-channel listing,
+    // same rules as the ACP agent/models method.
+    const { fetchSelectableModelsLive } = await import('./provider/provider.js');
+    process.stdout.write(`${JSON.stringify(await fetchSelectableModelsLive())}\n`);
     return;
   }
 

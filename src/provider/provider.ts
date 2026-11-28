@@ -692,6 +692,65 @@ export function lookupApiKey(specOrId: string): string | undefined {
   return apiKeyFor(resolved.envKey) || undefined;
 }
 
+/**
+ * Live catalog for hosts: the models each KEY-CONFIGURED channel actually
+ * serves, fetched in parallel from GET /models with per-channel fallback
+ * (vendors → curated list, gateways → configured model). Channels without
+ * a key never appear — same rule as the sync snapshot. The fetcher is
+ * injectable for tests; the default hits the network with a 5s timeout.
+ */
+export async function fetchSelectableModelsLive(
+  fetchModels: (baseUrl: string, apiKey?: string) => Promise<string[]> = fetchEndpointModels,
+): Promise<{ modelId: string; name: string }[]> {
+  const byId = new Map<string, { modelId: string; name: string }>();
+  const jobs: Promise<void>[] = [];
+
+  for (const id of Object.keys(MODEL_REGISTRY) as ModelId[]) {
+    if (id === 'custom') continue; // ships via listCustomGateways
+    const key = lookupApiKey(id);
+    if (!key) continue;
+    const baseUrl = baseUrlFor(resolveModel(id))?.replace(/\/$/, '');
+    const registryName = MODEL_REGISTRY[id]?.name ?? id;
+    jobs.push((async () => {
+      let live: string[] = [];
+      try {
+        live = baseUrl ? await fetchModels(baseUrl, key) : [];
+      } catch {
+        live = []; // channel-level fallback: curated list
+      }
+      const models = live.length > 0 ? live : vendorModels(id);
+      for (const model of models) {
+        const modelId = vendorModelSpec(id, model);
+        if (!byId.has(modelId)) {
+          byId.set(modelId, { modelId, name: `${registryName} ${model}` });
+        }
+      }
+    })());
+  }
+
+  for (const gateway of listCustomGateways()) {
+    const key = lookupApiKey(gateway.spec);
+    jobs.push((async () => {
+      let live: string[] = [];
+      try {
+        live = await fetchModels(gateway.baseUrl.replace(/\/$/, ''), key);
+      } catch {
+        live = []; // channel-level fallback: configured model
+      }
+      const models = live.length > 0 ? live : [gateway.model];
+      for (const model of models) {
+        const modelId = `${gateway.spec}:${model}`;
+        if (!byId.has(modelId)) {
+          byId.set(modelId, { modelId, name: `${gateway.spec} ${model}` });
+        }
+      }
+    })());
+  }
+
+  await Promise.all(jobs);
+  return [...byId.values()];
+}
+
 /** Persists the custom gateway chosen in the /models flow. */
 export function setCustomModel(custom: { baseUrl: string; model: string }): void {
   const cfg = loadConfig();

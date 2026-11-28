@@ -354,3 +354,96 @@ describe('profile:MODEL spec 形态', () => {
     expect(resolveModel('half:x').model).not.toBe('x');
   });
 });
+
+describe('fetchSelectableModelsLive', () => {
+  const PROVIDER_KEY_ENV = [
+    'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'OPENAI_API_KEY',
+    'DEEPSEEK_API_KEY', 'GLM_API_KEY', 'MINIMAX_API_KEY', 'KIMI_API_KEY', 'TRANSCODE_API_KEY',
+  ];
+  const saved: Record<string, string | undefined> = {};
+  const scrubEnv = () => {
+    for (const name of PROVIDER_KEY_ENV) { saved[name] = process.env[name]; delete process.env[name]; }
+  };
+  const restoreEnv = () => {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+  };
+
+  test('网关线上多模型;厂商通道失败回退 curated;无 key 不现', async () => {
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(
+      process.env.TRANSCODE_CONFIG_PATH!,
+      JSON.stringify({
+        apiKeys: { glmc: 'k' },
+        profiles: { gw1: { baseUrl: 'http://gw1/v1', model: 'mb' } },
+      }),
+    );
+    scrubEnv();
+    try {
+      const { fetchSelectableModelsLive } = await import('./provider.js');
+      const live = await fetchSelectableModelsLive(async (baseUrl) =>
+        baseUrl === 'http://gw1/v1' ? ['ma', 'mb', 'mc'] : [],
+      );
+      const ids = live.map((m) => m.modelId);
+      expect(ids).toContain('gw1:ma');
+      expect(ids).toContain('gw1:mc');
+      expect(ids).toContain('glmc:glm-5.3-flash'); // glmc 通道线上空 → curated 回退
+      expect(ids.some((id) => id.startsWith('deepseek:') || id.startsWith('anthropic:'))).toBe(false);
+    } finally {
+      restoreEnv();
+    }
+  });
+
+  test('单通道 fetcher 抛错只回退该通道', async () => {
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(
+      process.env.TRANSCODE_CONFIG_PATH!,
+      JSON.stringify({
+        apiKeys: { glmc: 'k', deepseek: 'k' },
+        profiles: { bad: { baseUrl: 'http://bad/v1', model: 'fb' } },
+      }),
+    );
+    scrubEnv();
+    try {
+      const { fetchSelectableModelsLive } = await import('./provider.js');
+      const live = await fetchSelectableModelsLive(async (baseUrl) => {
+        if (baseUrl === 'http://bad/v1') throw new Error('boom');
+        if (baseUrl.includes('deepseek')) return ['deepseek-v4-pro'];
+        return [];
+      });
+      const ids = live.map((m) => m.modelId);
+      expect(ids).toContain('bad:fb'); // 抛错 → 回退已配模型
+      expect(ids).toContain('deepseek:deepseek-v4-pro');
+      expect(ids).toContain('glmc:glm-5.3'); // 空列表 → curated 回退
+    } finally {
+      restoreEnv();
+    }
+  });
+
+  test('通道并行:两通道各 120ms,总时长 < 200ms', async () => {
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(
+      process.env.TRANSCODE_CONFIG_PATH!,
+      JSON.stringify({
+        profiles: {
+          g1: { baseUrl: 'http://g1/v1', model: 'm1' },
+          g2: { baseUrl: 'http://g2/v1', model: 'm2' },
+        },
+      }),
+    );
+    scrubEnv();
+    try {
+      const { fetchSelectableModelsLive } = await import('./provider.js');
+      const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+      const started = Date.now();
+      await fetchSelectableModelsLive(async () => {
+        await delay(120);
+        return ['x'];
+      });
+      expect(Date.now() - started).toBeLessThan(200);
+    } finally {
+      restoreEnv();
+    }
+  });
+});

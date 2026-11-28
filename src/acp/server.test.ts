@@ -139,19 +139,47 @@ describe('session/list 与 session/close', () => {
 });
 
 describe('agent/models', () => {
-  test('免初始化直接可用,返回具体规格目录(key 圈定)', async () => {
+  const PROVIDER_KEY_ENV = [
+    'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'OPENAI_API_KEY',
+    'DEEPSEEK_API_KEY', 'GLM_API_KEY', 'MINIMAX_API_KEY', 'KIMI_API_KEY', 'TRANSCODE_API_KEY',
+  ];
+
+  test('线上拉取假网关多模型;无 key 通道不现', async () => {
+    const gateway = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const { pathname } = new URL(request.url);
+        if (pathname === '/v1/models') {
+          return Response.json({ data: [{ id: 'ma' }, { id: 'mb' }] });
+        }
+        return new Response('not found', { status: 404 });
+      },
+    });
+    const saved: Record<string, string | undefined> = {};
+    for (const name of PROVIDER_KEY_ENV) {
+      saved[name] = process.env[name];
+      delete process.env[name];
+    }
     writeFileSync(
       process.env.TRANSCODE_CONFIG_PATH!,
-      JSON.stringify({ apiKeys: { glmc: 'test-key' } }),
+      JSON.stringify({ profiles: { gw1: { baseUrl: `http://localhost:${gateway.port}/v1`, model: 'mb' } } }),
     );
-    const server = makeServer();
-    const frame = await server.call('agent/models');
-    const models = (frame.result as { models: Array<{ modelId: string; name: string }> })
-      .models;
-    expect(Array.isArray(models)).toBe(true);
-    expect(models.some((model) => model.modelId === 'glmc:glm-5.3-flash')).toBe(true);
-    expect(models.some((model) => model.modelId === 'glmc')).toBe(false);
-    expect(models.every((model) => typeof model.name === 'string')).toBe(true);
+    try {
+      const server = makeServer();
+      const frame = await server.call('agent/models');
+      const models = (frame.result as { models: Array<{ modelId: string; name: string }> })
+        .models;
+      expect(models.some((model) => model.modelId === 'gw1:ma')).toBe(true);
+      expect(models.some((model) => model.modelId === 'gw1:mb')).toBe(true);
+      expect(models.some((model) => model.modelId === 'glmc')).toBe(false);
+      expect(models.every((model) => typeof model.name === 'string')).toBe(true);
+    } finally {
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+      await gateway.stop();
+    }
   });
 
   test('session/new 的 availableModels 同为具体规格', async () => {
