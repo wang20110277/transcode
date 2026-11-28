@@ -77,6 +77,56 @@ async function readOptional(file: string): Promise<string | null> {
   }
 }
 
+const MAX_IMPORT_DEPTH = 3;
+const MAX_IMPORT_CHARS = 64 * 1024;
+
+/**
+ * Whole-line `@相对路径` imports, resolved relative to the importing file's
+ * directory. Depth is capped at MAX_IMPORT_DEPTH, each imported file at
+ * MAX_IMPORT_CHARS (truncation annotated); missing paths, directories and
+ * import cycles degrade to an inline annotation instead of an error.
+ * Prose mentions of @something mid-line are left untouched.
+ */
+export async function resolveContextImports(
+  content: string,
+  baseDir: string,
+  depth = 0,
+  seen: Set<string> = new Set(),
+): Promise<string> {
+  const out: string[] = [];
+  for (const line of content.split('\n')) {
+    const match = /^@(\S+)$/.exec(line.trim());
+    if (!match) {
+      out.push(line);
+      continue;
+    }
+    const spec = match[1]!;
+    if (depth + 1 > MAX_IMPORT_DEPTH) {
+      out.push(`(@${spec} 超过导入深度上限)`);
+      continue;
+    }
+    const absolute = path.resolve(baseDir, spec);
+    if (seen.has(absolute)) {
+      out.push(`(@${spec} 循环导入,已跳过)`);
+      continue;
+    }
+    let raw: string;
+    try {
+      raw = await fs.readFile(absolute, 'utf8');
+    } catch {
+      out.push(`(@${spec} 导入失败:文件不存在)`);
+      continue;
+    }
+    seen.add(absolute);
+    const body =
+      raw.length > MAX_IMPORT_CHARS
+        ? `${raw.slice(0, MAX_IMPORT_CHARS)}\n... (@${spec} 超过 64KB,已截断)`
+        : raw;
+    out.push(await resolveContextImports(body, path.dirname(absolute), depth + 1, seen));
+  }
+  return out.join('\n');
+}
+
 /** First context-file hit in `dir` by CONTEXT_FILE_NAMES priority. */
 async function pickLevelFile(dir: string): Promise<{ absolute: string; content: string } | null> {
   for (const name of CONTEXT_FILE_NAMES) {
@@ -107,10 +157,17 @@ export async function loadHierarchyContext(
     if (remaining <= 0) break;
     const found = await pickLevelFile(dir);
     if (!found) continue;
+    // Imports resolve before budgeting; the seed makes self-imports cycle.
+    const expanded = await resolveContextImports(
+      found.content,
+      dir,
+      0,
+      new Set([found.absolute]),
+    );
     const clipped =
-      found.content.length > remaining
-        ? `${found.content.slice(0, remaining)}\n${TRUNCATION_MARKER}`
-        : found.content;
+      expanded.length > remaining
+        ? `${expanded.slice(0, remaining)}\n${TRUNCATION_MARKER}`
+        : expanded;
     picked.push({ path: path.relative(cwd, found.absolute), content: clipped });
     remaining -= clipped.length;
   }
