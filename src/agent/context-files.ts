@@ -55,16 +55,26 @@ export async function gitRootOf(cwd: string): Promise<string | null> {
  * A gitRoot that does not contain cwd is ignored (falls back to the cap).
  */
 export async function contextAncestors(cwd: string, gitRoot: string | null): Promise<string[]> {
-  const start = path.resolve(cwd);
-  let bound = gitRoot ? path.resolve(gitRoot) : null;
-  if (bound && bound !== start && !start.startsWith(bound + path.sep)) bound = null;
+  // Containment must compare canonical spellings: git reports physical
+  // paths (/private/var/... on macOS) while the caller may pass a symlinked
+  // or case-variant cwd. A gitRoot that (canonically) does not contain cwd
+  // clamps the walk to cwd itself — never unbounds it past the workspace.
+  const realStart = await realpathOrResolve(cwd);
+  let stopAt: string | null = null;
+  if (gitRoot) {
+    const realBound = await realpathOrResolve(gitRoot);
+    stopAt =
+      realBound === realStart || realStart.startsWith(realBound + path.sep)
+        ? realBound
+        : realStart;
+  }
 
   const levels: string[] = [];
-  let current: string | undefined = start;
+  let current: string | undefined = path.resolve(cwd);
   while (current) {
     levels.push(current);
-    if (current === bound) break;
-    if (!bound && levels.length >= MAX_LEVELS_WITHOUT_GIT) break;
+    if (stopAt && (await realpathOrResolve(current)) === stopAt) break;
+    if (!stopAt && levels.length >= MAX_LEVELS_WITHOUT_GIT) break;
     const parent = path.dirname(current);
     if (parent === current) break; // filesystem root
     current = parent;
@@ -72,8 +82,20 @@ export async function contextAncestors(cwd: string, gitRoot: string | null): Pro
   return [...new Set(levels)];
 }
 
+async function realpathOrResolve(p: string): Promise<string> {
+  try {
+    return await fs.realpath(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
 async function readOptional(file: string): Promise<string | null> {
   try {
+    const stat = await fs.stat(file);
+    // A >512KB "instructions" file is not instructions; skipping keeps the
+    // read bounded instead of slurping megabytes to clip them to a budget.
+    if (!stat.isFile() || stat.size > 512_000) return null;
     const content = await fs.readFile(file, 'utf8');
     const trimmed = content.trim();
     return trimmed || null;
@@ -179,34 +201,39 @@ export async function loadHierarchyContext(
   return picked.reverse();
 }
 
-/** Directories whose context note read_file already injected this session. */
-const injectedSubdirs = new Set<string>();
-
-/** Test isolation: clears the per-session sub-directory injection ledger. */
-export function resetSubdirInjection(): void {
-  injectedSubdirs.clear();
-}
+/** Cap for a lazily injected sub-directory note (they ride tool results). */
+const MAX_SUBDIR_NOTE_CHARS = 16_000;
 
 /**
  * Context note for a sub-directory the agent just read a file from.
- * Returns null when dir is the workspace cwd itself (its level already
- * lives in the system prompt), when the note was already injected this
- * session, or when the directory has no context file. A miss does not
- * burn the one-shot: a note created later in the session still loads.
- * `@` imports inside the note resolve like any context file.
+ * `injected` is the caller's per-SESSION ledger (ToolSession.injectedSubdirs)
+ * — a fresh session re-injects. Returns null when dir is the workspace cwd
+ * itself (its level already lives in the system prompt), when the note was
+ * already injected this session, or when the directory has no context file.
+ * A miss does not burn the one-shot: a note created later still loads.
+ * `@` imports resolve like any context file; the note is clamped to
+ * MAX_SUBDIR_NOTE_CHARS so it can never balloon a tool result.
  */
-export async function findSubdirContext(dir: string, cwd: string): Promise<ContextFile | null> {
+export async function findSubdirContext(
+  dir: string,
+  cwd: string,
+  injected: Set<string>,
+): Promise<ContextFile | null> {
   const resolved = path.resolve(dir);
   if (resolved === path.resolve(cwd)) return null;
-  if (injectedSubdirs.has(resolved)) return null;
+  if (injected.has(resolved)) return null;
 
   for (const name of SUBDIR_CONTEXT_FILE_NAMES) {
     const absolute = path.join(resolved, name);
     const content = await readOptional(absolute);
     if (content) {
-      injectedSubdirs.add(resolved);
+      injected.add(resolved);
       const expanded = await resolveContextImports(content, resolved, 0, new Set([absolute]));
-      return { path: path.relative(cwd, absolute), content: expanded };
+      const clipped =
+        expanded.length > MAX_SUBDIR_NOTE_CHARS
+          ? `${expanded.slice(0, MAX_SUBDIR_NOTE_CHARS)}\n${TRUNCATION_MARKER}`
+          : expanded;
+      return { path: path.relative(cwd, absolute), content: clipped };
     }
   }
   return null;

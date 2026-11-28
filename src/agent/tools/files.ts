@@ -165,9 +165,15 @@ export const readFileTool: AgentTool = {
       MAX_READ_BYTES,
     );
 
-    // Sub-directory context note (one-shot per directory per session);
-    // appended after truncation — notes are small and must not be clipped.
-    const note = await findSubdirContext(path.dirname(absolute), ctx.cwd);
+    // Sub-directory context note (one-shot per directory per session), keyed
+    // to the fixed workspace root — the bash tool's `cd` roams ctx.cwd but
+    // the hierarchy in the system prompt was built from rootCwd. Appended
+    // after truncation so the (size-capped) note is never clipped.
+    const note = await findSubdirContext(
+      path.dirname(absolute),
+      ctx.session.rootCwd,
+      ctx.session.injectedSubdirs,
+    );
     if (note) output += `\n\n[(来自 ${note.path})]\n${note.content}`;
     return output;
   },

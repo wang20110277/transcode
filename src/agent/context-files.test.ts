@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -7,7 +8,6 @@ import {
   findSubdirContext,
   gitRootOf,
   loadHierarchyContext,
-  resetSubdirInjection,
   resolveContextImports,
 } from './context-files.js';
 
@@ -60,6 +60,18 @@ describe('loadHierarchyContext', () => {
     const root = path.join(outer, 'repo');
     put(root, 'AGENTS.md', 'inside');
     const files = await loadHierarchyContext(root, { gitRoot: root });
+    expect(files).toHaveLength(1);
+    expect(files[0]!.content).toBe('inside');
+  });
+
+  test('路径别名(symlink vs physical)下 git 边界仍成立,不泄漏仓库外文件', async () => {
+    const outer = makeTree(); // macOS: /var/folders/... 拼法,git 返回 /private/var/...
+    put(outer, 'AGENTS.md', 'LEAKED: outside the git repo');
+    const repo = path.join(outer, 'repo');
+    put(repo, 'AGENTS.md', 'inside');
+    execFileSync('git', ['init', repo]);
+    const files = await loadHierarchyContext(repo); // gitRoot 省略 → gitRootOf 的物理拼法
+    expect(files.some((file) => file.content.includes('LEAKED'))).toBe(false);
     expect(files).toHaveLength(1);
     expect(files[0]!.content).toBe('inside');
   });
@@ -163,29 +175,41 @@ describe('loadHierarchyContext + @导入集成', () => {
 });
 
 describe('findSubdirContext', () => {
-  test('首次返回、同目录二次 null、cwd 本身 null、reset 后可再返回', async () => {
+  test('超大说明跳过,大说明钳制到 16K', async () => {
+    const root = makeTree();
+    put(path.join(root, 'big'), 'AGENTS.md', 'y'.repeat(300 * 1024));
+    put(path.join(root, 'huge'), 'AGENTS.md', 'z'.repeat(600 * 1024));
+
+    const big = await findSubdirContext(path.join(root, 'big'), root, new Set<string>());
+    expect(big).not.toBeNull();
+    expect(big!.content.length).toBeLessThanOrEqual(16_000 + 100); // 16K + 截断标记
+    expect(big!.content).toContain('(project instructions truncated)');
+
+    const huge = await findSubdirContext(path.join(root, 'huge'), root, new Set<string>());
+    expect(huge).toBeNull();
+  });
+
+  test('首次返回、同目录二次 null、cwd 本身 null', async () => {
     const root = makeTree();
     put(path.join(root, 'sub'), 'AGENTS.md', 'sub rules');
-    resetSubdirInjection();
+    const injected = new Set<string>();
 
-    const first = await findSubdirContext(path.join(root, 'sub'), root);
+    const first = await findSubdirContext(path.join(root, 'sub'), root, injected);
     expect(first?.content).toBe('sub rules');
     expect(first?.path).toBe(path.join('sub', 'AGENTS.md'));
 
-    expect(await findSubdirContext(path.join(root, 'sub'), root)).toBeNull();
-    expect(await findSubdirContext(root, root)).toBeNull();
+    expect(await findSubdirContext(path.join(root, 'sub'), root, injected)).toBeNull();
+    expect(await findSubdirContext(root, root, injected)).toBeNull();
 
-    resetSubdirInjection();
-    const again = await findSubdirContext(path.join(root, 'sub'), root);
-    expect(again?.content).toBe('sub rules');
+    const fresh = await findSubdirContext(path.join(root, 'sub'), root, new Set<string>());
+    expect(fresh?.content).toBe('sub rules');
   });
 
   test('子目录说明里的 @ 导入同样展开', async () => {
     const root = makeTree();
     put(path.join(root, 'sub'), 'AGENTS.md', '@./note.md');
     put(path.join(root, 'sub'), 'note.md', 'note body');
-    resetSubdirInjection();
-    const found = await findSubdirContext(path.join(root, 'sub'), root);
+    const found = await findSubdirContext(path.join(root, 'sub'), root, new Set<string>());
     expect(found?.content).toContain('note body');
   });
 });
@@ -194,6 +218,7 @@ describe('contextAncestors', () => {
   test('最近→根,含两端去重', async () => {
     const root = makeTree();
     const deep = path.join(root, 'a', 'b');
+    mkdirSync(deep, { recursive: true }); // cwd 必须真实存在(realpath 判定依赖)
     expect(await contextAncestors(deep, root)).toEqual([deep, path.join(root, 'a'), root]);
   });
 });

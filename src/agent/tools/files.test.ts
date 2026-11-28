@@ -54,6 +54,36 @@ describe('read_file', () => {
     expect(rootRead).not.toContain('[(来自');
   });
 
+  test('bash cd 之后仍按固定工作区根判定与展示', async () => {
+    const dir = workspace();
+    const session = createToolSession(dir);
+    mkdirSync(path.join(dir, 'sub'));
+    writeFileSync(path.join(dir, 'sub', 'AGENTS.md'), 'sub rules\n');
+    writeFileSync(path.join(dir, 'sub', 'a.ts'), 'a\n');
+
+    // bash 工具 cd 后会更新 session.cwd;懒加载判定必须仍以 rootCwd 为准
+    session.cwd = path.join(dir, 'sub');
+    const out = await read(session, 'a.ts');
+    expect(out).toContain('[(来自 sub/AGENTS.md)]');
+    expect(out).toContain('sub rules');
+  });
+
+  test('新会话同目录会重新注入(每会话一次,而非每进程一次)', async () => {
+    const dir = workspace();
+    const sessionA = createToolSession(dir);
+    mkdirSync(path.join(dir, 'sub'));
+    writeFileSync(path.join(dir, 'sub', 'AGENTS.md'), 'sub rules\n');
+    writeFileSync(path.join(dir, 'sub', 'a.ts'), 'a\n');
+    writeFileSync(path.join(dir, 'sub', 'b.ts'), 'b\n');
+
+    const first = await read(sessionA, 'sub/a.ts');
+    expect(first).toContain('[(来自 sub/AGENTS.md)]');
+
+    const sessionB = createToolSession(dir);
+    const second = await read(sessionB, 'sub/b.ts');
+    expect(second).toContain('[(来自 sub/AGENTS.md)]');
+  });
+
   test('records the file as read in the session', async () => {
     const dir = workspace();
     const session = createToolSession(dir);
