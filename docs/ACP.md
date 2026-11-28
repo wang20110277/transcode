@@ -24,7 +24,8 @@ bun bin/transcode.ts acp
 | --- | --- |
 | `initialize` | 握手，返回协议版本和能力 |
 | `authenticate` | MVP 恒返回 `null`（不要求认证） |
-| `session/new` | 创建进程内 session，返回 `sessionId` 和模型列表 |
+| `agent/models` | transcode 扩展：免会话返回模型目录 `{models: [{modelId, name}]}`（CLI 侧等价 `transcode models`，stdout 一行 JSON） |
+| `session/new` | 创建进程内 session，返回 `sessionId` 和模型列表。`params.model` 非法（未知前缀/拼法）直接 `invalidParams`，**不静默回退默认模型**；空白视为未提供 |
 | `session/prompt` | 执行一个 turn，流式发送 `session/update`，最后返回 `stopReason` |
 | `session/set_model` | 切换后续 turn 使用的模型 |
 | `session/cancel` | 取消当前 turn（也支持作为 notification） |
@@ -218,6 +219,11 @@ OpenAI 兼容网关可以用 `OPENAI_BASE_URL` 覆盖 base URL；`TRANSCODE_BASE
 - multica 对 `session/request_permission` 会自动选择 `allow_once`。
 - transcode 不广告 `loadSession`，因此每个任务默认新 session；如果同一进程内复用 session，会保留内存中的对话历史。
 - 不使用 MCP 时 multica 传来的 `mcpServers` 为空；有值会被忽略。
+
+## 宿主约定(机器可读诊断)
+
+- **错误行**:请求处理失败时 stderr 稳定输出一行 `error: <message>`(stdout 始终是纯 JSON-RPC 帧)。宿主可 grep `^error: ` 透传给用户。
+- **信号退出**:SIGINT/SIGTERM 时 stderr 输出 `[transcode] <信号>: shutting down` 后尽快退出(退出码 0)。
 
 ## 调试
 

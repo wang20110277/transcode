@@ -252,6 +252,11 @@ export class AcpServer implements AcpSessionHost {
   }
 }
 
+/** One machine-readable stderr line explaining a signal-driven exit. */
+export function shutdownNotice(signal: string): string {
+  return `[transcode] ${signal}: shutting down\n`;
+}
+
 export async function runAcpServer(): Promise<void> {
   // stdout is the JSON-RPC channel. Any library that calls console.log must not
   // corrupt it, so route console output to stderr for the lifetime of the server.
@@ -264,13 +269,14 @@ export async function runAcpServer(): Promise<void> {
   const transport = new JsonRpcTransport();
   const server = new AcpServer(transport);
 
-  const shutdown = () => {
+  const shutdown = (signal: string) => {
+    process.stderr.write(shutdownNotice(signal));
     server.shutdown();
     transport.close();
     process.exit(0);
   };
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
+  process.once('SIGINT', () => shutdown('SIGINT'));
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
 
   process.stderr.write(`[transcode] ACP server ready (v${VERSION})\n`);
 

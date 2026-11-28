@@ -231,3 +231,11 @@ describe('session/load 走磁盘', () => {
     expect(frame.error?.code).toBe(-32002);
   });
 });
+
+describe('shutdownNotice', () => {
+  test('返回带信号名的一行原因', async () => {
+    const { shutdownNotice } = await import('./server.js');
+    expect(shutdownNotice('SIGTERM')).toBe('[transcode] SIGTERM: shutting down\n');
+    expect(shutdownNotice('SIGINT')).toBe('[transcode] SIGINT: shutting down\n');
+  });
+});
