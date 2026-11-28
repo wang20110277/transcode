@@ -153,12 +153,14 @@ export class AcpServer implements AcpSessionHost {
         return { sessions };
       }
 
-      // Closes the live session; the disk record stays loadable.
+      // Closes the live session; the disk record stays loadable. close()
+      // also blocks a still-unwinding round's late persist from clobbering
+      // whatever a re-loaded session writes next.
       case 'session/close': {
         const sessionId = requireString(params, 'sessionId');
         const session = this.sessions.get(sessionId);
         if (session) {
-          session.cancel();
+          session.close();
           this.sessions.delete(sessionId);
         }
         return null;

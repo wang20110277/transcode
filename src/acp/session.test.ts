@@ -38,6 +38,87 @@ async function round(session: AcpSession, text: string): Promise<void> {
 }
 
 describe('AcpSession 持久化', () => {
+  test('persist 保住 summary(REPL /compact 摘要不丢)', async () => {
+    const session = new AcpSession(fakeHost, workspace, 'glmc:glm-5.3-flash');
+    await round(session, '第一轮');
+    const record = getSession(session.id)!;
+    record.summary = '早期轮次的摘要 digest';
+    const restored = AcpSession.fromRecord(fakeHost, record);
+    restored.persist();
+    expect(getSession(session.id)?.summary).toBe('早期轮次的摘要 digest');
+  });
+
+  test('标题生成不阻塞响应(后台补写)', async () => {
+    const session = new AcpSession(fakeHost, workspace, 'glmc:glm-5.3-flash');
+    await round(session, '第一轮'); // mock 无 provider,先落盘
+    // 手工装一个"永不返回"的模型,模拟慢网关的标题调用
+    (session as unknown as { lastProviderModel?: unknown }).lastProviderModel = {
+      invoke: () => new Promise(() => {}),
+    };
+    (session as unknown as { titleGenerated: boolean }).titleGenerated = false;
+    await round(session, '第二轮'); // 修复前:finally 内联 await → 挂死超时
+    expect(existsSync(recordFile(session))).toBe(true);
+  });
+
+  test('close 后的晚到 persist 不再写盘', async () => {
+    const session = new AcpSession(fakeHost, workspace, 'glmc:glm-5.3-flash');
+    await round(session, '第一轮');
+    const before = JSON.parse(readFileSync(recordFile(session), 'utf8')) as SessionRecord;
+    session.close();
+    await new Promise((r) => setTimeout(r, 5));
+    session.persist(); // 孤儿轮的 finally 晚到落盘
+    const after = JSON.parse(readFileSync(recordFile(session), 'utf8')) as SessionRecord;
+    expect(after.updatedAt).toBe(before.updatedAt);
+  });
+
+  test('取消轮的悬空 tool_calls 落盘前补占位 ToolMessage', async () => {
+    const session = new AcpSession(fakeHost, workspace, 'glmc:glm-5.3-flash');
+    await round(session, '第一轮');
+    session.messages.push(
+      new AIMessage({
+        content: '',
+        tool_calls: [
+          { id: 'c1', name: 'bash', args: { command: 'ls' } },
+          { id: 'c2', name: 'read_file', args: { path: 'a' } },
+        ],
+      }),
+      new ToolMessage({ content: 'out', tool_call_id: 'c1', name: 'bash' }),
+    );
+    session.persist();
+    const record = getSession(session.id)!;
+    const tools = record.messages.filter((m) => m.getType() === 'tool') as ToolMessage[];
+    const c2 = tools.find((t) => t.tool_call_id === 'c2');
+    expect(c2).toBeDefined();
+    expect(String(c2!.content)).toContain('cancelled');
+  });
+
+  test('finalizeRound:同步落回退标题,模型标题后台补写', async () => {
+    const session = new AcpSession(fakeHost, workspace, 'glmc:glm-5.3-flash');
+    await round(session, '帮我看看这个项目');
+    let release!: (value: { content: string }) => void;
+    const gate = new Promise<{ content: string }>((resolve) => {
+      release = resolve;
+    });
+    const internal = session as unknown as {
+      lastProviderModel?: unknown;
+      titleGenerated: boolean;
+      finalizeRound: () => void;
+      titleUpgradeDone?: Promise<void>;
+    };
+    internal.lastProviderModel = { invoke: () => gate };
+    internal.titleGenerated = false;
+
+    internal.finalizeRound(); // 必须立即返回,不等模型
+    session.persist();
+    const before = JSON.parse(readFileSync(recordFile(session), 'utf8')) as SessionRecord;
+    expect(before.title).not.toBe('模型起的标题');
+
+    release({ content: '模型起的标题' });
+    await internal.titleUpgradeDone;
+    const after = JSON.parse(readFileSync(recordFile(session), 'utf8')) as SessionRecord;
+    expect(after.title).toBe('模型起的标题');
+  });
+
   test('一轮 prompt 后落盘,文件含标题与消息', async () => {
     const session = new AcpSession(fakeHost, workspace, 'glmc:glm-5.3-flash');
     await round(session, '你好,帮我看看项目');

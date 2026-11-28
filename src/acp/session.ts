@@ -4,6 +4,7 @@ import {
   AIMessage,
   HumanMessage,
   SystemMessage,
+  ToolMessage,
   type BaseMessage,
 } from '@langchain/core/messages';
 import { createModel, getAvailableModels, resolveModel } from '../provider/provider.js';
@@ -84,6 +85,12 @@ export class AcpSession {
   private title = '新对话';
   private titleGenerated = false;
   private lastProviderModel?: { invoke: (input: string) => Promise<{ content: unknown }> };
+  /** Compaction digest carried across rounds (REPL /compact invariant). */
+  private summary?: string;
+  /** Set by close(): a late finally must not clobber the disk record. */
+  private closed = false;
+  /** In-flight background title upgrade (test seam + dedupe). */
+  private titleUpgradeDone?: Promise<void>;
 
   constructor(
     private readonly host: AcpSessionHost,
@@ -101,12 +108,15 @@ export class AcpSession {
     session.messages.push(...record.messages);
     session.title = record.title;
     session.createdAt = record.createdAt;
+    session.summary = record.summary;
     session.titleGenerated = true;
     return session;
   }
 
   /** Persists the conversation to ~/.transcode/sessions (atomic write). */
   persist(): void {
+    if (this.closed) return;
+    this.fillDanglingToolCalls();
     saveSession(
       buildSessionRecord({
         id: this.id,
@@ -115,22 +125,87 @@ export class AcpSession {
         cwd: this.cwd,
         model: this.modelSpec,
         messages: this.messages,
+        summary: this.summary,
       }),
     );
   }
 
-  /** First successful round names the conversation (model title, truncation fallback). */
-  private async maybeGenerateTitle(): Promise<void> {
-    if (this.titleGenerated) return;
+  /** Closes the live session: cancels and blocks any late persist. */
+  close(): void {
+    this.closed = true;
+    this.cancel();
+  }
+
+  /**
+   * Round finalization, called from prompt()'s finally on every outcome.
+   * Sync: truncation-fallback title + persist (the host's response must not
+   * wait on a model call). The model-generated title upgrade then runs in
+   * the background and re-persists on completion — mirroring the REPL.
+   */
+  private finalizeRound(): void {
+    if (!this.titleGenerated) {
+      const humanText = this.firstHumanText();
+      if (humanText && !this.lastProviderModel) {
+        this.title = humanText.replace(/\s+/g, ' ').trim().slice(0, 24) || '新对话';
+        this.titleGenerated = true;
+      }
+    }
+    this.persist();
+    if (!this.titleGenerated && this.lastProviderModel) {
+      const model = this.lastProviderModel;
+      const humanText = this.firstHumanText() ?? '';
+      const aiText = this.firstAiText() ?? '';
+      this.titleUpgradeDone = (async () => {
+        try {
+          const title = await generateTitle(model, humanText, aiText);
+          if (!this.closed && title) {
+            this.title = title;
+            this.titleGenerated = true;
+            this.persist();
+          }
+        } catch {
+          // Keep the truncation fallback already on disk.
+        }
+      })();
+    }
+  }
+
+  private firstHumanText(): string | undefined {
     const human = this.messages.find((message) => message.getType() === 'human');
+    return typeof human?.content === 'string' ? human.content : undefined;
+  }
+
+  private firstAiText(): string | undefined {
     const ai = this.messages.find((message) => message.getType() === 'ai');
-    const humanText = typeof human?.content === 'string' ? human.content : '';
-    const aiText = typeof ai?.content === 'string' ? ai.content : '';
-    if (!humanText) return;
-    this.title = this.lastProviderModel
-      ? await generateTitle(this.lastProviderModel, humanText, aiText)
-      : humanText.replace(/\s+/g, ' ').trim().slice(0, 24) || '新对话';
-    this.titleGenerated = true;
+    return typeof ai?.content === 'string' ? ai.content : undefined;
+  }
+
+  /**
+   * A cancelled multi-tool round can leave assistant tool_calls without
+   * matching tool results; providers reject such history on EVERY later
+   * prompt, and persistence makes that durable. Append a placeholder
+   * result for each unanswered call before the record leaves memory.
+   */
+  private fillDanglingToolCalls(): void {
+    const answered = new Set(
+      this.messages
+        .filter((message) => message.getType() === 'tool')
+        .map((message) => (message as ToolMessage).tool_call_id),
+    );
+    for (const message of this.messages) {
+      if (message.getType() !== 'ai') continue;
+      for (const call of (message as AIMessage).tool_calls ?? []) {
+        if (!call.id || answered.has(call.id)) continue;
+        this.messages.push(
+          new ToolMessage({
+            content: '(cancelled before execution)',
+            tool_call_id: call.id,
+            name: call.name,
+          }),
+        );
+        answered.add(call.id);
+      }
+    }
   }
 
   get modelState(): AcpSessionModelState {
@@ -167,7 +242,7 @@ export class AcpSession {
     try {
       const provider =
         process.env.TRANSCODE_MOCK === '1' ? undefined : createModel(this.modelSpec);
-      this.lastProviderModel = provider?.model;
+      if (provider) this.lastProviderModel = provider.model;
       // Fixed for the turn: the mode could change while the agent runs.
       const planMode = getPermissionMode() === 'plan';
       const basePrompt = buildSystemPrompt(await loadProjectContext(this.cwd), {
@@ -219,8 +294,8 @@ export class AcpSession {
     } finally {
       // Cancel/error rounds persist too (REPL cadence): the record on disk
       // always mirrors the in-memory history of the last finished round.
-      await this.maybeGenerateTitle();
-      this.persist();
+      // finalizeRound never awaits the model (title upgrade is background).
+      this.finalizeRound();
       this.busy = false;
       this.abortController = undefined;
     }
