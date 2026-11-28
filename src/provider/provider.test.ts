@@ -270,3 +270,35 @@ describe('getSelectableModels', () => {
     }
   });
 });
+
+describe('profile:MODEL spec 形态', () => {
+  test('profile名:MODEL 路由到该网关;裸 profile 名语义不变', async () => {
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(
+      process.env.TRANSCODE_CONFIG_PATH!,
+      JSON.stringify({
+        profiles: { gw1: { baseUrl: 'http://gw1/v1', model: 'mb' } },
+      }),
+    );
+    const { resolveModel, validateModelSpec } = await import('./provider.js');
+    const routed = resolveModel('gw1:model-a');
+    expect(routed.model).toBe('model-a');
+    expect(routed.baseUrl).toBe('http://gw1/v1');
+    expect(resolveModel('gw1').model).toBe('mb');
+    expect(validateModelSpec('gw1:anything')).toBeNull();
+  });
+
+  test('不完整 profile 作前缀不劫持厂商分支', async () => {
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(
+      process.env.TRANSCODE_CONFIG_PATH!,
+      JSON.stringify({
+        profiles: { half: { baseUrl: 'http://half/v1' } }, // 缺 model
+      }),
+    );
+    const { resolveModel, validateModelSpec } = await import('./provider.js');
+    // half:x 不是 profile 路由(不完整),也不是厂商前缀 → 校验拒绝
+    expect(validateModelSpec('half:x')).toContain('invalid model');
+    expect(resolveModel('half:x').model).not.toBe('x');
+  });
+});

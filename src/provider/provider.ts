@@ -222,6 +222,9 @@ export function validateModelSpec(spec: string): string | null {
   const prefix = raw.slice(0, colon).toLowerCase();
   const modelPart = raw.slice(colon + 1).trim();
   if (!modelPart) return `invalid model id: ${raw}(可用模型见 agent/models)`;
+  // A complete saved gateway accepts any model after the colon.
+  const profilePrefix = loadConfig().profiles?.[raw.slice(0, colon)];
+  if (profilePrefix?.baseUrl && profilePrefix.model) return null;
   const knownPrefix =
     prefix in MODEL_REGISTRY || prefix in PROVIDER_DEFAULTS || prefix in SPEC_PREFIX;
   return knownPrefix ? null : `invalid model id: ${raw}(可用模型见 agent/models)`;
@@ -374,6 +377,20 @@ export function resolveModel(spec?: string): ResolvedModel {
   if (colon > 0) {
     const prefix = raw.slice(0, colon).toLowerCase();
     const model = raw.slice(colon + 1);
+    // gw1:model-a routes through a saved custom gateway (multi-model per
+    // gateway); profiles win over vendor prefixes by name, like bare ids.
+    const profile = loadConfig().profiles?.[raw.slice(0, colon)];
+    if (profile?.baseUrl && profile.model && model) {
+      return {
+        id: raw,
+        name: `${raw.slice(0, colon)} · ${model}`,
+        provider: 'openai',
+        model,
+        baseUrl: profile.baseUrl,
+        envKey: profile.envKey ?? keyIdToEnvKey(profile.keyId) ?? 'TRANSCODE_API_KEY',
+        ...({ keyId: profile.keyId } as object),
+      } as ResolvedModel;
+    }
     const defaults = PROVIDER_DEFAULTS[prefix];
     if (defaults && model) {
       const custom = prefix === 'custom' ? loadConfig().custom : undefined;
