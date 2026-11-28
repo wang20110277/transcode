@@ -36,6 +36,8 @@ transcode 已经有可用的编码 Agent 内核：多模型与自定义网关、
 
 ### 2. ACP 会话持久化（中）
 
+状态：已实现。
+
 - **现状**：ACP 会话完全不落盘，`loadSession: false`；`session/load` 和 `session/resume` 只能找回同一进程里的会话，进程退出即丢。
 - **目标**：声明 `loadSession: true`，`session/load`、`session/list`、`session/resume`、`session/close` 都走磁盘。
 - **做法**：复用 REPL 已在用的会话存储（`src/sessions/store.ts`）。分叉放到有了文件快照之后（见阶段三）。

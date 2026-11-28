@@ -28,7 +28,9 @@ bun bin/transcode.ts acp
 | `session/prompt` | 执行一个 turn，流式发送 `session/update`，最后返回 `stopReason` |
 | `session/set_model` | 切换后续 turn 使用的模型 |
 | `session/cancel` | 取消当前 turn（也支持作为 notification） |
-| `session/load` / `session/resume` | 进程内 session 存在时返回同一 session；否则 `-32002` |
+| `session/load` / `session/resume` | 进程内命中返回同一 session；否则从 `~/.transcode/sessions` 磁盘恢复（重启后续问），仍无 `-32002` |
+| `session/list` | transcode 扩展：按 `cwd` 返回该项目磁盘会话（`sessionId`/`title`/`updatedAt`，新→旧） |
+| `session/close` | 关闭活跃 session（磁盘记录保留，可再 `load`） |
 | `session/set_config_option` | MVP 接受但忽略 |
 | `session/request_permission` | **Agent → 客户端** 的请求，见下文 |
 
