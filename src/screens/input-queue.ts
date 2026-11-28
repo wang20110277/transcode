@@ -26,10 +26,14 @@ export function reduceQueue(queue: string[], action: QueueAction): QueueState {
     }
     case 'turnEnded':
     case 'submitNext': {
+      // Same-reference returns on empty/frozen are a CONTRACT: the useReducer
+      // call site bails out of re-rendering on reference equality, keeping
+      // idle Enter-presses from thrashing the queue commit.
       if (queue.length === 0) return { queue };
       return { queue: queue.slice(1), submit: queue[0] };
     }
     case 'frozen':
+      // Frozen keeps the SAME reference: nothing shifted, nothing to render.
       return { queue };
     case 'clear':
       return { queue: [] };

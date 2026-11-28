@@ -181,7 +181,15 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
   const turnDisplayRef = useRef('');
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [savedInput, setSavedInput] = useState('');
-  const [phase, setPhase] = useState<PromptPhase>('idle');
+  const [phase, setPhaseState] = useState<PromptPhase>('idle');
+  // Synchronous mirror: queued-command chaining must read the CURRENT
+  // phase right after a command opened a picker — React state alone lags
+  // a render, and chaining into a picker would submit into it.
+  const phaseRef = useRef<PromptPhase>('idle');
+  const setPhase = useCallback((next: PromptPhase) => {
+    phaseRef.current = next;
+    setPhaseState(next);
+  }, []);
   // Live tool activity while generating; collapsed into a summary at turn end.
   const [liveTool, setLiveTool] = useState<{
     title: string;
@@ -275,7 +283,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
     setInputQueue(next.queue);
     return next;
   }, []);
-  const handleSubmitRef = useRef<(raw: string) => Promise<void>>(async () => {});
+  const handleSubmitRef = useRef<(raw: string, fromQueue?: boolean) => Promise<void>>(async () => {});
 
   // ---- chat state ----
   const [busy, setBusy] = useState(false);
@@ -504,12 +512,17 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       input: string;
       prefix?: string;
       suffix?: string;
-      output?: string;
       hiddenLines?: string[];
     }) => {
       streamAppendRef.current?.flush();
-      const output =
-        entry.output ?? `${entry.prefix ?? ''}${liveOutputRef.current}${entry.suffix ?? ''}`;
+      const output = `${entry.prefix ?? ''}${liveOutputRef.current}${entry.suffix ?? ''}`;
+      // TRANSCODE_DEBUG_FRAME=1: the tail-window budget is the one seam no
+      // unit test can see (it depends on the real terminal's rows).
+      if (process.env.TRANSCODE_DEBUG_FRAME) {
+        process.stderr.write(
+          `[frame] outputChars=${output.length} rows=${stdout?.rows ?? '?'}\n`,
+        );
+      }
       liveOutputRef.current = '';
       setChat(prev => ({
         ...prev,
@@ -631,19 +644,29 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
 
   const runChat = useCallback(
     async (text: string, display?: string) => {
+      // Concurrency guard (#9): the queue continuation and a user Enter can
+      // both reach here across an await boundary; this is the single choke
+      // point, so re-queue instead of running a second concurrent turn.
+      if (busyRef.current) {
+        applyQueue({ type: 'enqueue', text });
+        return;
+      }
       setBusyBoth(true);
       const controller = new AbortController();
       abortRef.current = controller;
-      await autoCompactIfNeeded();
-      // No host entry: the input echo lives in the live region and the whole
-      // turn lands in <Static> as one immutable entry when it ends.
-      beginTurnLive(display ?? text);
-      // Fixed for the turn: the mode may be switched while the agent runs.
-      const planMode = getPermissionMode() === 'plan';
 
       let endedNaturally = false;
       let turnHiddenLines: string[] | undefined;
       try {
+        // Inside the try (#10): a throw in the pre-turn段 (auto-compaction,
+        // live-region setup) must still clear busy in the finally below.
+        await autoCompactIfNeeded();
+        // No host entry: the input echo lives in the live region and the whole
+        // turn lands in <Static> as one immutable entry when it ends.
+        beginTurnLive(display ?? text);
+        // Fixed for the turn: the mode may be switched while the agent runs.
+        const planMode = getPermissionMode() === 'plan';
+
         const provider =
           process.env.TRANSCODE_MOCK === '1'
             ? undefined
@@ -830,7 +853,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
         // next queued prompt; cancel and error freeze it (Enter resumes).
         const queued = applyQueue(endedNaturally ? { type: 'turnEnded' } : { type: 'frozen' });
         if (endedNaturally && queued.submit) {
-          void handleSubmitRef.current(queued.submit);
+          void handleSubmitRef.current(queued.submit, true);
         }
       }
     },
@@ -1065,7 +1088,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
     toolSessionRef.current = createToolSession(process.cwd());
   }, []);
 
-  const handleSubmit = useCallback(async (raw: string) => {
+  const handleSubmit = useCallback(async (raw: string, fromQueue = false) => {
     // Bare Enter is a no-op except at the apikey prompt, where it means
     // "reuse the saved key" (the prompt's 回车沿用 hint).
     const trimmed = resolveSubmitInput(phase, raw);
@@ -1358,6 +1381,14 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       await runChat(trimmed);
       return;
     }
+    // Queued slash chain (#9): a command never runs the agent loop, so a
+    // queued prompt behind it would freeze forever. Only a submission that
+    // CAME from the queue chains on, and only when the command left the
+    // prompt idle — pickers consume the next input themselves.
+    if (fromQueue && phaseRef.current === 'idle') {
+      const next = applyQueue({ type: 'submitNext' });
+      if (next.submit) void handleSubmitRef.current(next.submit, true);
+    }
     dragFlush();
 
     commitInput('');
@@ -1365,6 +1396,9 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
     setSavedInput('');
   }, [exit, ctx, phase, handleApiKey, addHistory, enterModelSelect, commitInput, dragFlush, runChat, startNewConversation, bannerEntry]);
   // Late-bound so runChat's finally can auto-continue queued prompts.
+  // Written during RENDER, not in an effect: the finally may fire in the
+  // same commit's aftermath, and an effect-run assignment would leave a
+  // stale no-op handler for that window (a queued prompt would vanish).
   handleSubmitRef.current = handleSubmit;
 
   // Ink binds the key handler in an effect, which React runs only after the
@@ -1798,7 +1832,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       }
       if (shouldResumeQueue(phase, inputRef.current, inputQueueRef.current.length)) {
         const next = applyQueue({ type: 'submitNext' });
-        if (next.submit) void handleSubmit(next.submit);
+        if (next.submit) void handleSubmit(next.submit, true);
         return;
       }
       handleSubmit(inputRef.current);
