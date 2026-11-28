@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import { RPC_ERRORS, RpcError, JsonRpcTransport } from './transport.js';
 import { AcpSession, sessionCwd, sessionNewResult, type AcpSessionHost } from './session.js';
 import { getSession } from '../sessions/store.js';
+import { listProjectSessions } from '../sessions/resume.js';
 import { loadConfig } from '../config.js';
 import { webSearchConfigWarning } from '../provider/web-search.js';
 import { invalidRulesNotice, loadPermissionRules } from '../agent/permission-rules.js';
@@ -137,6 +138,29 @@ export class AcpServer implements AcpSessionHost {
       case 'session/cancel': {
         const sessionId = requireString(params, 'sessionId');
         this.sessions.get(sessionId)?.cancel();
+        return null;
+      }
+
+      // transcode extension for its own hosts (multica/transonce): the
+      // project's disk sessions, newest first.
+      case 'session/list': {
+        const cwd = sessionCwd(params.cwd);
+        const sessions = listProjectSessions(cwd).map((record) => ({
+          sessionId: record.id,
+          title: record.title,
+          updatedAt: record.updatedAt,
+        }));
+        return { sessions };
+      }
+
+      // Closes the live session; the disk record stays loadable.
+      case 'session/close': {
+        const sessionId = requireString(params, 'sessionId');
+        const session = this.sessions.get(sessionId);
+        if (session) {
+          session.cancel();
+          this.sessions.delete(sessionId);
+        }
         return null;
       }
 
