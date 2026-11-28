@@ -20,6 +20,11 @@ export const CONTEXT_FILE_NAMES = [
   '.transcode/AGENTS.md',
 ];
 
+/** Lazy sub-directory notes skip the repo-level .transcode override. */
+const SUBDIR_CONTEXT_FILE_NAMES = CONTEXT_FILE_NAMES.filter(
+  (name) => name !== '.transcode/AGENTS.md',
+);
+
 export interface ContextFile {
   /** Display path relative to the workspace cwd ('../AGENTS.md' allowed). */
   path: string;
@@ -172,4 +177,37 @@ export async function loadHierarchyContext(
     remaining -= clipped.length;
   }
   return picked.reverse();
+}
+
+/** Directories whose context note read_file already injected this session. */
+const injectedSubdirs = new Set<string>();
+
+/** Test isolation: clears the per-session sub-directory injection ledger. */
+export function resetSubdirInjection(): void {
+  injectedSubdirs.clear();
+}
+
+/**
+ * Context note for a sub-directory the agent just read a file from.
+ * Returns null when dir is the workspace cwd itself (its level already
+ * lives in the system prompt), when the note was already injected this
+ * session, or when the directory has no context file. A miss does not
+ * burn the one-shot: a note created later in the session still loads.
+ * `@` imports inside the note resolve like any context file.
+ */
+export async function findSubdirContext(dir: string, cwd: string): Promise<ContextFile | null> {
+  const resolved = path.resolve(dir);
+  if (resolved === path.resolve(cwd)) return null;
+  if (injectedSubdirs.has(resolved)) return null;
+
+  for (const name of SUBDIR_CONTEXT_FILE_NAMES) {
+    const absolute = path.join(resolved, name);
+    const content = await readOptional(absolute);
+    if (content) {
+      injectedSubdirs.add(resolved);
+      const expanded = await resolveContextImports(content, resolved, 0, new Set([absolute]));
+      return { path: path.relative(cwd, absolute), content: expanded };
+    }
+  }
+  return null;
 }

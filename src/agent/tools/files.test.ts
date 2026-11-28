@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { editFileTool, readFileTool, writeFileTool } from './files.js';
@@ -34,6 +34,26 @@ async function edit(session: ToolSession, file: string, old_string: string, new_
 }
 
 describe('read_file', () => {
+  test('子目录说明懒加载:首读附加,同目录再读不重复,根目录文件不附加', async () => {
+    const dir = workspace();
+    const session = createToolSession(dir);
+    writeFileSync(path.join(dir, 'README.md'), 'readme\n');
+    mkdirSync(path.join(dir, 'sub'));
+    writeFileSync(path.join(dir, 'sub', 'AGENTS.md'), 'sub rules\n');
+    writeFileSync(path.join(dir, 'sub', 'a.ts'), 'a\n');
+    writeFileSync(path.join(dir, 'sub', 'b.ts'), 'b\n');
+
+    const first = await read(session, 'sub/a.ts');
+    expect(first).toContain('[(来自 sub/AGENTS.md)]');
+    expect(first).toContain('sub rules');
+
+    const second = await read(session, 'sub/b.ts');
+    expect(second).not.toContain('[(来自');
+
+    const rootRead = await read(session, 'README.md');
+    expect(rootRead).not.toContain('[(来自');
+  });
+
   test('records the file as read in the session', async () => {
     const dir = workspace();
     const session = createToolSession(dir);

@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { AgentTool } from './types.js';
 import { hasFileBeenRead, markFileRead, type ToolSession } from './session.js';
 import { MAX_LINE_LENGTH, MAX_READ_BYTES, displayPath, resolveInsideWorkspace, truncate } from './fs-utils.js';
+import { findSubdirContext } from '../context-files.js';
 import { lineDiff } from './diff.js';
 
 const SNIPPET_CONTEXT_LINES = 4;
@@ -159,10 +160,16 @@ export const readFileTool: AgentTool = {
       .join('\n');
 
     const more = offset - 1 + selected.length < lines.length;
-    return truncate(
+    let output = truncate(
       numbered + (more ? `\n... (${lines.length} lines total)` : ''),
       MAX_READ_BYTES,
     );
+
+    // Sub-directory context note (one-shot per directory per session);
+    // appended after truncation — notes are small and must not be clipped.
+    const note = await findSubdirContext(path.dirname(absolute), ctx.cwd);
+    if (note) output += `\n\n[(来自 ${note.path})]\n${note.content}`;
+    return output;
   },
 };
 

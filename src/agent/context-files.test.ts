@@ -2,7 +2,14 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { contextAncestors, gitRootOf, loadHierarchyContext, resolveContextImports } from './context-files.js';
+import {
+  contextAncestors,
+  findSubdirContext,
+  gitRootOf,
+  loadHierarchyContext,
+  resetSubdirInjection,
+  resolveContextImports,
+} from './context-files.js';
 
 function makeTree(): string {
   return mkdtempSync(path.join(tmpdir(), 'transcode-context-files-'));
@@ -152,6 +159,34 @@ describe('loadHierarchyContext + @导入集成', () => {
 
     const tight = await loadHierarchyContext(root, { gitRoot: root, budget: 5 });
     expect(tight[0]!.content).toContain('(project instructions truncated)');
+  });
+});
+
+describe('findSubdirContext', () => {
+  test('首次返回、同目录二次 null、cwd 本身 null、reset 后可再返回', async () => {
+    const root = makeTree();
+    put(path.join(root, 'sub'), 'AGENTS.md', 'sub rules');
+    resetSubdirInjection();
+
+    const first = await findSubdirContext(path.join(root, 'sub'), root);
+    expect(first?.content).toBe('sub rules');
+    expect(first?.path).toBe(path.join('sub', 'AGENTS.md'));
+
+    expect(await findSubdirContext(path.join(root, 'sub'), root)).toBeNull();
+    expect(await findSubdirContext(root, root)).toBeNull();
+
+    resetSubdirInjection();
+    const again = await findSubdirContext(path.join(root, 'sub'), root);
+    expect(again?.content).toBe('sub rules');
+  });
+
+  test('子目录说明里的 @ 导入同样展开', async () => {
+    const root = makeTree();
+    put(path.join(root, 'sub'), 'AGENTS.md', '@./note.md');
+    put(path.join(root, 'sub'), 'note.md', 'note body');
+    resetSubdirInjection();
+    const found = await findSubdirContext(path.join(root, 'sub'), root);
+    expect(found?.content).toContain('note body');
   });
 });
 
