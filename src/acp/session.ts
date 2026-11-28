@@ -13,6 +13,7 @@ import { getPermissionMode } from '../agent/permission.js';
 import { rememberAlways } from '../agent/permission-rules.js';
 import { buildSystemPrompt, loadProjectContext, withPlanMode } from '../agent/system-prompt.js';
 import { resolveContextTokens } from '../sessions/compact.js';
+import { buildSessionRecord, generateTitle, saveSession, type SessionRecord } from '../sessions/store.js';
 import {
   RPC_ERRORS,
   RpcError,
@@ -77,6 +78,11 @@ export class AcpSession {
   private modelSpec: string;
   /** Shared across prompts: shell cwd persistence and read-file tracking. */
   private readonly toolSession: ToolSession;
+  /** Conversation metadata persisted alongside the messages. */
+  private createdAt: number = Date.now();
+  private title = '新对话';
+  private titleGenerated = false;
+  private lastProviderModel?: { invoke: (input: string) => Promise<{ content: unknown }> };
 
   constructor(
     private readonly host: AcpSessionHost,
@@ -85,6 +91,44 @@ export class AcpSession {
   ) {
     this.modelSpec = modelSpec?.trim() || process.env.TRANSCODE_MODEL || '';
     this.toolSession = createToolSession(cwd);
+  }
+
+  /** Rebuilds a session from its disk record (session/load after restart). */
+  static fromRecord(host: AcpSessionHost, record: SessionRecord): AcpSession {
+    const session = new AcpSession(host, record.cwd, record.model);
+    session.messages.push(...record.messages);
+    session.title = record.title;
+    session.createdAt = record.createdAt;
+    session.titleGenerated = true;
+    return session;
+  }
+
+  /** Persists the conversation to ~/.transcode/sessions (atomic write). */
+  persist(): void {
+    saveSession(
+      buildSessionRecord({
+        id: this.id,
+        title: this.title,
+        createdAt: this.createdAt,
+        cwd: this.cwd,
+        model: this.modelSpec,
+        messages: this.messages,
+      }),
+    );
+  }
+
+  /** First successful round names the conversation (model title, truncation fallback). */
+  private async maybeGenerateTitle(): Promise<void> {
+    if (this.titleGenerated) return;
+    const human = this.messages.find((message) => message.getType() === 'human');
+    const ai = this.messages.find((message) => message.getType() === 'ai');
+    const humanText = typeof human?.content === 'string' ? human.content : '';
+    const aiText = typeof ai?.content === 'string' ? ai.content : '';
+    if (!humanText) return;
+    this.title = this.lastProviderModel
+      ? await generateTitle(this.lastProviderModel, humanText, aiText)
+      : humanText.replace(/\s+/g, ' ').trim().slice(0, 24) || '新对话';
+    this.titleGenerated = true;
   }
 
   get modelState(): AcpSessionModelState {
@@ -121,6 +165,7 @@ export class AcpSession {
     try {
       const provider =
         process.env.TRANSCODE_MOCK === '1' ? undefined : createModel(this.modelSpec);
+      this.lastProviderModel = provider?.model;
       // Fixed for the turn: the mode could change while the agent runs.
       const planMode = getPermissionMode() === 'plan';
       const basePrompt = buildSystemPrompt(await loadProjectContext(this.cwd), {
@@ -170,6 +215,10 @@ export class AcpSession {
       });
       return { stopReason: 'refusal' };
     } finally {
+      // Cancel/error rounds persist too (REPL cadence): the record on disk
+      // always mirrors the in-memory history of the last finished round.
+      await this.maybeGenerateTitle();
+      this.persist();
       this.busy = false;
       this.abortController = undefined;
     }
