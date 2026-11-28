@@ -141,6 +141,9 @@ export function getSelectableModels(): { modelId: string; name: string }[] {
     }
   }
   for (const gateway of listCustomGateways()) {
+    // #32: a colon in a hand-edited profile name would emit catalog ids
+    // that fail validateModelSpec — skip the channel entirely.
+    if (gateway.spec.includes(':')) continue;
     if (!byId.has(gateway.spec)) {
       byId.set(gateway.spec, { modelId: gateway.spec, name: `${gateway.spec} · ${gateway.model}` });
     }
@@ -230,20 +233,29 @@ export function validateModelSpec(spec: string): string | null {
   const raw = spec.trim();
   if (!raw) return null; // blank = not provided; caller uses its default
   const colon = raw.indexOf(':');
+  const invalid = `invalid model id: ${raw}(可用模型见 agent/models)`;
   if (colon <= 0) {
-    const known =
-      raw in MODEL_REGISTRY || loadConfig().profiles?.[raw] !== undefined;
-    return known ? null : `invalid model id: ${raw}(可用模型见 agent/models)`;
+    // #23/#24: agree with resolveModel — registry ids (case-insensitive,
+    // own-property only), the fable alias when configured, and COMPLETE
+    // profiles (a half-configured name is not selectable).
+    const profile = loadConfig().profiles?.[raw];
+    const complete = !!(profile?.baseUrl && profile?.model);
+    const fableOk = raw.toLowerCase() === 'fable' && !!fableModelName();
+    const known = isKnownModelId(raw) || complete || fableOk;
+    return known ? null : invalid;
   }
   const prefix = raw.slice(0, colon).toLowerCase();
   const modelPart = raw.slice(colon + 1).trim();
-  if (!modelPart) return `invalid model id: ${raw}(可用模型见 agent/models)`;
+  if (!modelPart) return invalid;
   // A complete saved gateway accepts any model after the colon.
   const profilePrefix = loadConfig().profiles?.[raw.slice(0, colon)];
   if (profilePrefix?.baseUrl && profilePrefix.model) return null;
+  // #22: own-property checks — the prototype chain holds no vendors.
   const knownPrefix =
-    prefix in MODEL_REGISTRY || prefix in PROVIDER_DEFAULTS || prefix in SPEC_PREFIX;
-  return knownPrefix ? null : `invalid model id: ${raw}(可用模型见 agent/models)`;
+    Object.prototype.hasOwnProperty.call(MODEL_REGISTRY, prefix) ||
+    Object.prototype.hasOwnProperty.call(PROVIDER_DEFAULTS, prefix) ||
+    Object.prototype.hasOwnProperty.call(SPEC_PREFIX, prefix);
+  return knownPrefix ? null : invalid;
 }
 
 /**
@@ -285,7 +297,18 @@ export function getModelConfig(id: ModelId): ModelConfig {
 }
 
 export function isKnownModelId(value: string): value is ModelId {
-  return Object.prototype.hasOwnProperty.call(MODEL_REGISTRY, value);
+  // Own-property only (#22: 'toString' & friends are not models) and
+  // case-insensitive (#23: validate and resolve must agree on GLMC).
+  return (
+    Object.prototype.hasOwnProperty.call(MODEL_REGISTRY, value) ||
+    Object.prototype.hasOwnProperty.call(MODEL_REGISTRY, value.toLowerCase())
+  );
+}
+
+/** Auth headers for gateway model listings: Bearer plus Anthropic's x-api-key (#34). */
+export function authHeaders(apiKey?: string): Record<string, string> {
+  if (!apiKey) return {};
+  return { Authorization: `Bearer ${apiKey}`, 'x-api-key': apiKey };
 }
 
 function defaultProvider(): string {
@@ -393,8 +416,10 @@ export function resolveModel(spec?: string): ResolvedModel {
   }
 
   if (isKnownModelId(raw)) {
-    const cfg = MODEL_REGISTRY[raw];
-    if (raw === 'custom') {
+    const cfg =
+      MODEL_REGISTRY[raw] ??
+      MODEL_REGISTRY[raw.toLowerCase() as ModelId];
+    if (raw.toLowerCase() === 'custom') {
       const saved = loadConfig().custom;
       return {
         id: raw,
@@ -739,8 +764,9 @@ export function lookupApiKey(specOrId: string): string | undefined {
 export async function fetchSelectableModelsLive(
   fetchModels: (baseUrl: string, apiKey?: string) => Promise<string[]> = fetchEndpointModels,
 ): Promise<{ modelId: string; name: string }[]> {
-  const byId = new Map<string, { modelId: string; name: string }>();
-  const jobs: Promise<void>[] = [];
+  // #33: results assemble in CHANNEL order after Promise.all — completion
+  // order must not shuffle the catalog between calls.
+  const jobs: Promise<Array<{ modelId: string; name: string }>>[] = [];
 
   for (const id of Object.keys(MODEL_REGISTRY) as ModelId[]) {
     if (id === 'custom') continue; // ships via listCustomGateways
@@ -756,16 +782,15 @@ export async function fetchSelectableModelsLive(
         live = []; // channel-level fallback: curated list
       }
       const models = live.length > 0 ? live : vendorModels(id);
-      for (const model of models) {
-        const modelId = vendorModelSpec(id, model);
-        if (!byId.has(modelId)) {
-          byId.set(modelId, { modelId, name: `${registryName} ${model}` });
-        }
-      }
+      return models.map((model) => ({
+        modelId: vendorModelSpec(id, model),
+        name: `${registryName} ${model}`,
+      }));
     })());
   }
 
   for (const gateway of listCustomGateways()) {
+    if (gateway.spec.includes(':')) continue; // #32: unvalidatable ids
     const key = lookupApiKey(gateway.spec);
     jobs.push((async () => {
       let live: string[] = [];
@@ -775,16 +800,19 @@ export async function fetchSelectableModelsLive(
         live = []; // channel-level fallback: configured model
       }
       const models = live.length > 0 ? live : [gateway.model];
-      for (const model of models) {
-        const modelId = `${gateway.spec}:${model}`;
-        if (!byId.has(modelId)) {
-          byId.set(modelId, { modelId, name: `${gateway.spec} ${model}` });
-        }
-      }
+      return models.map((model) => ({
+        modelId: `${gateway.spec}:${model}`,
+        name: `${gateway.spec} ${model}`,
+      }));
     })());
   }
 
-  await Promise.all(jobs);
+  const byId = new Map<string, { modelId: string; name: string }>();
+  for (const entries of await Promise.all(jobs)) {
+    for (const entry of entries) {
+      if (!byId.has(entry.modelId)) byId.set(entry.modelId, entry);
+    }
+  }
   return [...byId.values()];
 }
 
@@ -976,7 +1004,7 @@ async function fetchEndpointModels(baseUrl: string, apiKey?: string): Promise<st
   try {
     const response = await Promise.race([
       fetch(`${baseUrl}/models`, {
-        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+        headers: authHeaders(apiKey),
       }),
       new Promise<Response>((_, reject) => {
         // unref: the losing timer must not keep the CLI process alive for

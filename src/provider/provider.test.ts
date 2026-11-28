@@ -496,3 +496,82 @@ describe('模型上下文长度后缀', () => {
     expect(contextSuffix('nope-unknown')).toBe('');
   });
 });
+
+describe('Minor 清账 F/G 组', () => {
+  test('#22 原型链名不算合法模型 id', async () => {
+    const { validateModelSpec } = await import('./provider.js');
+    for (const bad of ['toString', 'constructor', 'hasOwnProperty', '__proto__']) {
+      expect(validateModelSpec(bad)).toContain('invalid model');
+    }
+  });
+
+  test('#23 fable 别名与裸名大小写:校验与解析一致', async () => {
+    const savedName = process.env.ANTHROPIC_DEFAULT_FABLE_MODEL_NAME;
+    const savedModel = process.env.ANTHROPIC_DEFAULT_FABLE_MODEL;
+    process.env.ANTHROPIC_DEFAULT_FABLE_MODEL_NAME = 'fable-test-model';
+    delete process.env.ANTHROPIC_DEFAULT_FABLE_MODEL;
+    const { validateModelSpec, resolveModel } = await import('./provider.js');
+    try {
+      expect(validateModelSpec('fable')).toBeNull();
+      expect(resolveModel('fable').model).toBe('fable-test-model');
+      expect(validateModelSpec('GLMC')).toBeNull();
+      expect(resolveModel('GLMC').model).toBe(resolveModel('glmc').model);
+    } finally {
+      if (savedName === undefined) delete process.env.ANTHROPIC_DEFAULT_FABLE_MODEL_NAME;
+      else process.env.ANTHROPIC_DEFAULT_FABLE_MODEL_NAME = savedName;
+      if (savedModel !== undefined) process.env.ANTHROPIC_DEFAULT_FABLE_MODEL = savedModel;
+    }
+  });
+
+  test('#24 不完整 profile 名过不了校验', async () => {
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(
+      process.env.TRANSCODE_CONFIG_PATH!,
+      JSON.stringify({ profiles: { half: { baseUrl: 'http://x/v1' } } }),
+    );
+    const { validateModelSpec } = await import('./provider.js');
+    expect(validateModelSpec('half')).toContain('invalid model');
+  });
+
+  test('#32 含冒号的 profile 名不进目录(同步与线上)', async () => {
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(
+      process.env.TRANSCODE_CONFIG_PATH!,
+      JSON.stringify({
+        apiKeys: { glmc: 'k' },
+        profiles: { 'my:gw': { baseUrl: 'http://x/v1', model: 'ma' } },
+      }),
+    );
+    const { getSelectableModels, fetchSelectableModelsLive } = await import('./provider.js');
+    expect(getSelectableModels().some((m) => m.modelId.includes('my:gw'))).toBe(false);
+    const live = await fetchSelectableModelsLive(async () => ['ma', 'mb']);
+    expect(live.some((m) => m.modelId.includes('my:gw'))).toBe(false);
+  });
+
+  test('#33 线上目录按通道序,不按完成序', async () => {
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(
+      process.env.TRANSCODE_CONFIG_PATH!,
+      JSON.stringify({
+        apiKeys: { glmc: 'k', deepseek: 'k' },
+      }),
+    );
+    const { fetchSelectableModelsLive } = await import('./provider.js');
+    const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const live = await fetchSelectableModelsLive(async (baseUrl) => {
+      // deepseek(注册表序在前)慢回,glmc 秒回——输出仍须注册表通道序
+      if (baseUrl.includes('deepseek')) await delay(60);
+      return baseUrl.includes('bigmodel') ? ['glm-x'] : ['ds-x'];
+    });
+    const ids = live.map((m) => m.modelId);
+    expect(ids.indexOf('deepseek:ds-x')).toBeLessThan(ids.indexOf('glmc:glm-x'));
+  });
+
+  test('#34 模型列表请求同时带 Bearer 与 x-api-key', async () => {
+    const { authHeaders } = await import('./provider.js');
+    const headers = authHeaders('sk-test');
+    expect(headers.Authorization).toBe('Bearer sk-test');
+    expect(headers['x-api-key']).toBe('sk-test');
+    expect(authHeaders(undefined)).toEqual({});
+  });
+});
