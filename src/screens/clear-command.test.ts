@@ -285,3 +285,14 @@ describe('/new', () => {
     expect(seen[0]).not.toContain('first question');
   });
 });
+
+describe('inputEcho(#4 掩码)', () => {
+  test('key 输入相位回显星号,其余原样', async () => {
+    const { inputEcho } = await import('./REPL.js');
+    expect(inputEcho('search_apikey', 'sk-123')).toBe('******');
+    expect(inputEcho('model_apikey', 'sk-123')).toBe('******');
+    expect(inputEcho('vendor_apikey', 'sk-123')).toBe('******');
+    expect(inputEcho('idle', 'hello')).toBe('hello');
+    expect(inputEcho('custom_baseurl', 'http://x')).toBe('http://x');
+  });
+});

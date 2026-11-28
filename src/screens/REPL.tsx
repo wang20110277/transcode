@@ -94,6 +94,13 @@ interface HistoryEntry {
   banner?: BannerData;
 }
 
+/** Key-input phases echo asterisks, never the typed secret (#4). */
+export function inputEcho(phase: PromptPhase, input: string): string {
+  const secret =
+    phase === 'model_apikey' || phase === 'vendor_apikey' || phase === 'search_apikey';
+  return secret ? '*'.repeat(input.length) : input;
+}
+
 type PromptPhase =
   | 'idle'
   | 'model_select'
@@ -1091,7 +1098,15 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       return;
     }
 
-    if (phase === 'search_check') return;
+    if (phase === 'search_check') {
+      // #7: previously a silent swallow — the typed text hung in the box
+      // while Enter did nothing. Clear it with a notice instead.
+      if (trimmed) {
+        addHistory({ input: trimmed, output: '搜索配置校验中,请稍候…' });
+        commitInput('');
+      }
+      return;
+    }
 
     if (phase === 'custom_baseurl') {
       if (!/^https?:\/\//.test(trimmed)) {
@@ -2161,7 +2176,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
           <Text color="gray" dimColor>{historyRule(stdout?.columns ?? 80)}</Text>
           <Box>
             <Text color={phase === 'idle' ? 'green' : 'yellow'}>{promptLabel}</Text>
-            <Text>{phase === 'model_apikey' ? '*'.repeat(input.length) : input}</Text>
+            <Text>{inputEcho(phase, input)}</Text>
             <Text color="gray">▎</Text>
           </Box>
           <Text color="gray" dimColor>{historyRule(stdout?.columns ?? 80)}</Text>

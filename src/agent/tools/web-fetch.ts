@@ -119,9 +119,12 @@ export const webFetchTool: AgentTool = {
       }
       const contentType = res.headers.get('content-type') ?? '';
       let bytes = new Uint8Array(await res.arrayBuffer());
-      if (bytes.length > FETCH_MAX_BYTES) bytes = bytes.slice(0, FETCH_MAX_BYTES);
+      // #6: report the REAL size — the clipped buffer used to underreport.
+      const totalBytes = bytes.length;
+      const byteClipped = totalBytes > FETCH_MAX_BYTES;
+      if (byteClipped) bytes = bytes.slice(0, FETCH_MAX_BYTES);
       if (!isTextualType(contentType)) {
-        return `Fetched ${url}: ${contentType || 'unknown content type'}, ${bytes.length} bytes (binary; not extracted).`;
+        return `Fetched ${url}: ${contentType || 'unknown content type'}, ${totalBytes} bytes${byteClipped ? ` (truncated at ${FETCH_MAX_BYTES})` : ''} (binary; not extracted).`;
       }
       let text = decodeBody(bytes, sniffCharset(contentType, bytes));
       let title: string | null = null;
