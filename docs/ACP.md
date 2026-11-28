@@ -24,7 +24,7 @@ bun bin/transcode.ts acp
 | --- | --- |
 | `initialize` | 握手，返回协议版本和能力 |
 | `authenticate` | MVP 恒返回 `null`（不要求认证） |
-| `agent/models` | transcode 扩展：免会话返回模型目录 `{models: [{modelId, name}]}`（CLI 侧等价 `transcode models`，stdout 一行 JSON） |
+| `agent/models` | transcode 扩展：免会话返回模型目录 `{models: [{modelId, name}]}`。**线上拉取**已配置 key 通道(GET /models,并行,通道级超时 5s)的真实模型,单通道失败回退 curated/已配模型;无 key 通道不显示;网关多模型全列(`gw1:MODEL` spec)。CLI 等价 `transcode models` |
 | `session/new` | 创建进程内 session，返回 `sessionId` 和模型列表。`params.model` 非法（未知前缀/拼法）直接 `invalidParams`，**不静默回退默认模型**；空白视为未提供 |
 | `session/prompt` | 执行一个 turn，流式发送 `session/update`，最后返回 `stopReason` |
 | `session/set_model` | 切换后续 turn 使用的模型 |
