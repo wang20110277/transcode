@@ -135,3 +135,45 @@ describe('writeContextTokens boolean form', () => {
     }
   });
 });
+
+describe('loadConfig 损坏保护(#8)', () => {
+  test('坏 JSON:读作空但拒绝落盘,原文件不动', async () => {
+    const { writeFileSync, readFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const os = await import('node:os');
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'tc-cfg-corrupt-'));
+    const file = path.join(dir, 'config.json');
+    writeFileSync(file, '{"apiKeys": {"glmc": "k"}'); // 手抖截断
+    process.env.TRANSCODE_CONFIG_PATH = file;
+    const { loadConfig, saveConfig } = await import('./config.js');
+    try {
+      expect(loadConfig()).toEqual({}); // 读路径仍可用
+      expect(() => saveConfig({ autoCompact: {} })).toThrow(/corrupt|损坏/i);
+      expect(readFileSync(file, 'utf8')).toBe('{"apiKeys": {"glmc": "k"}'); // 原文件未被动
+    } finally {
+      delete process.env.TRANSCODE_CONFIG_PATH;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('文件缺失:照常空读可写;好文件读写不受影响', async () => {
+    const path = await import('node:path');
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const os = await import('node:os');
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'tc-cfg-ok-'));
+    const file = path.join(dir, 'config.json');
+    process.env.TRANSCODE_CONFIG_PATH = file;
+    const { loadConfig, saveConfig } = await import('./config.js');
+    try {
+      expect(loadConfig()).toEqual({});
+      saveConfig({ webSearch: true });
+      expect(loadConfig().webSearch).toBe(true);
+      saveConfig({ apiKeys: { glmc: 'k' }, webSearch: true }); // 后续写不丢段
+      expect(loadConfig().apiKeys?.glmc).toBe('k');
+    } finally {
+      delete process.env.TRANSCODE_CONFIG_PATH;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

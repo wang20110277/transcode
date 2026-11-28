@@ -45,11 +45,18 @@ export function memoryDir(): string {
   return path.join(userMemoryRoot(), 'memory');
 }
 
-/** Trimmed, separator-free file stem; null when the name cannot be a file. */
+/**
+ * Trimmed, separator-free single-token file stem; null when the name
+ * cannot be a memory file. Internal whitespace is rejected (frontmatter
+ * round-trips stay line-stable and /forget's single-token args reach the
+ * file), and the reserved index stem MEMORY is never a memory.
+ */
 export function sanitizeMemoryName(name: string): string | null {
   const trimmed = name.trim();
   if (!trimmed || trimmed === '.' || trimmed === '..') return null;
   if (trimmed.includes('/') || trimmed.includes('\\')) return null;
+  if (/\s/.test(trimmed)) return null;
+  if (trimmed.toLowerCase() === 'memory') return null;
   return trimmed;
 }
 

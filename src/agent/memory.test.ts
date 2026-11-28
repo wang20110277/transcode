@@ -167,3 +167,23 @@ describe('scanEntries robustness', () => {
     });
   });
 });
+
+describe('sanitizeMemoryName 加固(#1/#2/#3)', () => {
+  test('拒保留 stem MEMORY(大小写不敏感)与内部空白', async () => {
+    const { sanitizeMemoryName } = await import('./memory.js');
+    expect(sanitizeMemoryName('MEMORY')).toBeNull();
+    expect(sanitizeMemoryName('memory')).toBeNull();
+    expect(sanitizeMemoryName('Memory')).toBeNull();
+    expect(sanitizeMemoryName('my memory')).toBeNull();
+    expect(sanitizeMemoryName('a\nb')).toBeNull();
+    expect(sanitizeMemoryName('good-name')).toBe('good-name');
+    expect(sanitizeMemoryName('  spaced  ')).toBe('spaced');
+  });
+
+  test('以 MEMORY 为名保存被拒,不吞掉索引', async () => {
+    const { saveMemory } = await import('./memory.js');
+    await expect(
+      saveMemory({ name: 'MEMORY', type: 'project', content: 'x' }),
+    ).rejects.toThrow(/invalid memory name/);
+  });
+});

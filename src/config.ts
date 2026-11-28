@@ -135,17 +135,35 @@ export function normalizeAutoCompact(raw: unknown): NormalizedAutoCompact {
 const configPath = (): string =>
   process.env.TRANSCODE_CONFIG_PATH ?? join(homedir(), '.transcode.json');
 
+/** True when the last loadConfig hit an unparseable (corrupt) file. */
+let configCorrupt = false;
+
 export function loadConfig(): TranscodeConfig {
+  configCorrupt = false;
+  let raw: string;
   try {
-    const parsed = JSON.parse(readFileSync(configPath(), 'utf8'));
+    raw = readFileSync(configPath(), 'utf8');
+  } catch {
+    return {}; // missing file — genuinely empty, saving is safe
+  }
+  try {
+    const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object') return parsed as TranscodeConfig;
   } catch {
-    // missing or invalid — treat as empty
+    configCorrupt = true;
   }
   return {};
 }
 
 export function saveConfig(config: TranscodeConfig): void {
+  // A corrupt file must never be overwritten: saveConfig merges over
+  // loadConfig's {} and would silently drop apiKeys/routing/profiles.
+  // Refuse loudly so the user can repair the file by hand.
+  if (configCorrupt) {
+    throw new Error(
+      `配置文件损坏,拒绝覆写(防止丢失 apiKeys 等字段):${configPath()} — 请手工修复 JSON 后重试`,
+    );
+  }
   writeFileSync(configPath(), JSON.stringify(config, null, 2) + '\n');
 }
 
