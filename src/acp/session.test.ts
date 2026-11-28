@@ -172,3 +172,48 @@ describe('AcpSession 持久化', () => {
     expect(second.updatedAt).toBeGreaterThanOrEqual(first.updatedAt);
   });
 });
+
+describe('Minor 清账 E 组', () => {
+  test('#18 首轮即失败(无 human)不落垃圾记录', async () => {
+    delete process.env.TRANSCODE_MOCK;
+    const { writeFileSync: wf } = await import('node:fs');
+    const configPath = path.join(sessionsDir, 'cfg.json');
+    wf(configPath, JSON.stringify({ profiles: { dead: { baseUrl: 'http://127.0.0.1:9/v1', model: 'x' } } }));
+    process.env.TRANSCODE_CONFIG_PATH = configPath;
+    try {
+      const session = new AcpSession(fakeHost, workspace, 'dead');
+      const result = await session.prompt({ sessionId: session.id, prompt: [{ type: 'text', text: 'hi' }] });
+      expect(result.stopReason).toBe('refusal');
+      expect(existsSync(recordFile(session))).toBe(false);
+    } finally {
+      process.env.TRANSCODE_MOCK = '1';
+      delete process.env.TRANSCODE_CONFIG_PATH;
+    }
+  });
+
+  test('#17 persist 抛错不卡 busy,下一轮照常', async () => {
+    const session = new AcpSession(fakeHost, workspace, 'glmc:glm-5.3-flash');
+    await round(session, '第一轮');
+    const { chmodSync } = await import('node:fs');
+    chmodSync(path.dirname(recordFile(session)), 0o500); // 项目目录只读,写入必炸
+    try {
+      const result = await session.prompt({ sessionId: session.id, prompt: [{ type: 'text', text: '第二轮' }] });
+      expect(result.stopReason).toBe('end_turn');
+      const internal = session as unknown as { busy: boolean };
+      expect(internal.busy).toBe(false);
+    } finally {
+      chmodSync(path.dirname(recordFile(session)), 0o700);
+    }
+  });
+
+  test('#19 fromRecord 钉住空 model,不落 env 回退', async () => {
+    process.env.TRANSCODE_MODEL = 'deepseek';
+    try {
+      const record = { id: 'ses_x', title: 't', createdAt: 1, updatedAt: 1, cwd: workspace, model: '', messages: [] };
+      const session = AcpSession.fromRecord(fakeHost, record);
+      expect((session as unknown as { modelSpec: string }).modelSpec).toBe('');
+    } finally {
+      delete process.env.TRANSCODE_MODEL;
+    }
+  });
+});

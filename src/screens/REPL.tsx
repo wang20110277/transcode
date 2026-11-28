@@ -1223,7 +1223,7 @@ export default function REPL({ ctx, banner, updateNotice }: REPLProps) {
       if (error) addHistory({ input: '', output: `⚠ ${error}` });
       if (!target) {
         // One-step resume: arrow-key picker over this project's sessions.
-        const projectSessions = listProjectSessions(process.cwd()).slice(0, 20);
+        const projectSessions = (await listProjectSessions(process.cwd())).slice(0, 20);
         if (projectSessions.length === 0) {
           addHistory({ input: trimmed, output: '当前项目暂无历史对话。' });
         } else {

@@ -104,6 +104,10 @@ export class AcpSession {
   /** Rebuilds a session from its disk record (session/load after restart). */
   static fromRecord(host: AcpSessionHost, record: SessionRecord): AcpSession {
     const session = new AcpSession(host, record.cwd, record.model);
+    // #19: pin the record's model verbatim — the constructor's
+    // TRANSCODE_MODEL fallback would silently switch models across a
+    // restart when the record was saved with an empty spec.
+    session.modelSpec = record.model;
     session.id = record.id;
     session.messages.push(...record.messages);
     session.title = record.title;
@@ -143,6 +147,9 @@ export class AcpSession {
    * the background and re-persists on completion — mirroring the REPL.
    */
   private finalizeRound(): void {
+    // #18: a round that failed before any human message landed (e.g.
+    // createModel threw on a missing key) is debris, not a conversation.
+    if (!this.firstHumanText()) return;
     if (!this.titleGenerated) {
       const humanText = this.firstHumanText();
       if (humanText && !this.lastProviderModel) {
@@ -150,7 +157,13 @@ export class AcpSession {
         this.titleGenerated = true;
       }
     }
-    this.persist();
+    try {
+      this.persist();
+    } catch (error) {
+      // #17: a persist failure (disk full, permissions) must surface as an
+      // error: line, never wedge busy — the finally below still clears it.
+      process.stderr.write(`error: persist failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
     if (!this.titleGenerated && this.lastProviderModel) {
       const model = this.lastProviderModel;
       const humanText = this.firstHumanText() ?? '';
@@ -161,7 +174,11 @@ export class AcpSession {
           if (!this.closed && title) {
             this.title = title;
             this.titleGenerated = true;
-            this.persist();
+            try {
+              this.persist();
+            } catch {
+              // The fallback-titled record already stands on disk.
+            }
           }
         } catch {
           // Keep the truncation fallback already on disk.

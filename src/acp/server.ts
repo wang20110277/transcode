@@ -169,7 +169,7 @@ export class AcpServer implements AcpSessionHost {
       // project's disk sessions, newest first.
       case 'session/list': {
         const cwd = sessionCwd(params.cwd);
-        const sessions = listProjectSessions(cwd).map((record) => ({
+        const sessions = (await listProjectSessions(cwd)).map((record) => ({
           sessionId: record.id,
           title: record.title,
           updatedAt: record.updatedAt,

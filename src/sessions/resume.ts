@@ -1,8 +1,41 @@
-import { listSessions, type SessionRecord } from './store.js';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { listSessions, readSessionRecord, sessionsRoot, projectDirName, type SessionRecord } from './store.js';
 
-/** Sessions whose recorded cwd matches, newest first (project-scoped picker source). */
-export function listProjectSessions(cwd: string): SessionRecord[] {
-  return listSessions().filter((session) => session.cwd === cwd);
+/**
+ * Sessions of ONE project, newest first — the picker source for /resume and
+ * ACP session/list. Reads only that project's directory (#20: the old
+ * listSessions()-then-filter parsed every session file in the store), and
+ * matches cwd spellings canonically so /tmp vs /private/tmp both hit.
+ */
+export async function listProjectSessions(cwd: string): Promise<SessionRecord[]> {
+  const wanted = await realpathQuiet(cwd);
+  const dir = path.join(sessionsRoot(), projectDirName(cwd));
+  let files: string[];
+  try {
+    files = (await fs.readdir(dir)).filter((file) => file.endsWith('.json'));
+  } catch {
+    return [];
+  }
+  const records: SessionRecord[] = [];
+  for (const file of files) {
+    const record = readSessionRecord(path.join(dir, file));
+    if (!record) continue;
+    // The directory already scopes by cwd spelling; realpath comparing
+    // catches alias spellings stored under the same directory name.
+    if (record.cwd === cwd || (await realpathQuiet(record.cwd)) === wanted) {
+      records.push(record);
+    }
+  }
+  return records.sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+async function realpathQuiet(p: string): Promise<string> {
+  try {
+    return await fs.realpath(p);
+  } catch {
+    return p;
+  }
 }
 
 /**

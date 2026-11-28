@@ -36,12 +36,16 @@ interface StoredMessage {
 const sessionsDir = (): string =>
   process.env.TRANSCODE_SESSIONS_DIR ?? path.join(homedir(), '.transcode', 'sessions');
 
+/** Store root + directory-name slug, shared with resume's scoped listing. */
+export const sessionsRoot = sessionsDir;
+export const projectDirName = (cwd: string): string => cwd.replace(/[\\/:]/g, '-');
+
 /**
  * Project subdirectory name (Claude Code style: "/a/b" -> "-a-b",
  * "C:\Users\x" -> "C--Users-x"). The drive's colon goes with the separators:
  * it is not a legal part of a Windows directory name, and mkdir fails on it.
  */
-const projectDir = (cwd: string): string => cwd.replace(/[\\/:]/g, '-');
+const projectDir = projectDirName;
 
 /** Fresh conversation id: bare UUID v4, like Claude Code session files. */
 export function newSessionId(): string {
@@ -109,6 +113,11 @@ function deserialize(stored: StoredMessage[]): BaseMessage[] {
         return new HumanMessage({ content });
     }
   });
+}
+
+/** Single-file read for scoped listings (resume.js). */
+export function readSessionRecord(file: string): SessionRecord | null {
+  return readRecord(file);
 }
 
 function readRecord(file: string): SessionRecord | null {
